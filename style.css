@@ -1,0 +1,16 @@
+body {
+  font-family: Arial, sans-serif;
+  padding: 20px;
+}
+
+button {
+  padding: 10px 16px;
+  margin-bottom: 20px;
+  cursor: pointer;
+}
+
+.notification {
+  border: 1px solid #ccc;
+  padding: 12px;
+  margin-bottom: 10px;
+}
