@@ -1,12 +1,12 @@
 // --- Config ---
 const API_URL = "https://api.3d7tech.com/v1/chat/completions";
-const API_KEY = ""; // Optional if your local LLM needs it
+const API_KEY = ""; // Optional if needed for your local LLM
 
-// --- Public Data Endpoints ---
+// --- Public APIs ---
 const WEATHER_API = "https://api.open-meteo.com/v1/forecast?latitude=51.5&longitude=-0.12&current_weather=true&daily=sunrise,sunset";
 const AQI_API = "https://api.waqi.info/feed/london/?token=demo"; // Example public AQI token
 
-// --- UI ---
+// --- UI Helpers ---
 function notify(text) {
   const div = document.createElement("div");
   div.className = "notification";
@@ -52,11 +52,12 @@ async function callLLM(prompt) {
       temperature: 0.0
     })
   });
+
   const data = await res.json();
   return JSON.parse(data.choices[0].message.content);
 }
 
-// --- Ask user questions for preferences ---
+// --- Ask user for input ---
 async function askUser(questions) {
   const answers = {};
   for (const q of questions) {
@@ -66,23 +67,21 @@ async function askUser(questions) {
   return answers;
 }
 
-// --- Build LLM prompt ---
-function buildPrompt(weather, aqi, userInputs = {}) {
+// --- Build LLM prompt for a single block ---
+function buildPromptForBlock(weather, aqi, userInputs = {}, block) {
   return `
-You are an autonomous personal assistant agent.
-Plan the user's day from 6:00 AM to 10:00 PM in hourly or block intervals.
-
-Weather: ${JSON.stringify(weather)}
-Air Quality (AQI): ${aqi}
-User preferences: ${JSON.stringify(userInputs)}
+You are an autonomous personal assistant.
+Plan the user's activities, clothing, meals, and notes for ${block.start} – ${block.end}.
+Use this weather + AQI data: ${JSON.stringify(weather)}, AQI: ${aqi}.
+User preferences so far: ${JSON.stringify(userInputs)}
 
 Rules:
 - Suggest clothing appropriate for weather and AQI
-- Suggest breakfast, lunch, dinner
+- Suggest meals if they fall in this block
 - Suggest leisure, exercise, errands, and indoor/outdoor activities
 - Avoid outdoor activities if AQI > 100 or rain
-- Ask questions to clarify preferences if needed
-- Return ONLY valid JSON array with this schema:
+- Ask questions if you need user preferences
+- Return ONLY valid JSON array with schema:
 [
   {
     "time": string,
@@ -96,48 +95,53 @@ Rules:
 `;
 }
 
-// --- Agent loop ---
+// --- Main agent loop ---
 async function runAgent() {
   document.getElementById("notifications").innerHTML = "";
 
   notify("Fetching weather and sunrise/sunset...");
   const weather = await fetchWeather();
-
-  notify(`Current temperature: ${weather.temperature}°C, wind: ${weather.windspeed} km/h`);
+  notify(`Temperature: ${weather.temperature}°C, Wind: ${weather.windspeed} km/h`);
   notify(`Sunrise: ${weather.sunrise}, Sunset: ${weather.sunset}`);
 
   notify("Fetching Air Quality Index...");
   const aqi = await fetchAQI();
-  if (aqi !== null) notify(`Current AQI: ${aqi}`);
+  if (aqi !== null) notify(`AQI: ${aqi}`);
   else notify("AQI data not available");
 
-  notify("Generating initial day plan...");
-  let prompt = buildPrompt(weather, aqi);
-  let dayPlan = await callLLM(prompt);
+  // Define 3-hour blocks
+  const blocks = [
+    { start: "6:00", end: "9:00" },
+    { start: "9:00", end: "12:00" },
+    { start: "12:00", end: "15:00" },
+    { start: "15:00", end: "18:00" },
+    { start: "18:00", end: "21:00" },
+    { start: "21:00", end: "22:00" }
+  ];
 
-  // Check for questions from LLM
+  let dayPlan = [];
   let combinedUserInputs = {};
-  let hasQuestions = true;
 
-  while (hasQuestions) {
-    const allQuestions = dayPlan
-      .flatMap(block => block.questions || [])
-      .filter(q => q.key && !combinedUserInputs[q.key]);
+  for (const block of blocks) {
+    notify(`Planning ${block.start} – ${block.end}...`);
+    let prompt = buildPromptForBlock(weather, aqi, combinedUserInputs, block);
+    let blockPlan = await callLLM(prompt);
 
-    if (allQuestions.length === 0) {
-      hasQuestions = false;
-      break;
+    // Ask questions for this block if any
+    const questions = blockPlan.flatMap(b => b.questions || []).filter(q => !combinedUserInputs[q.key]);
+    if (questions.length > 0) {
+      const answers = await askUser(questions);
+      combinedUserInputs = { ...combinedUserInputs, ...answers };
+
+      notify(`Updating plan for ${block.start} – ${block.end} based on your input...`);
+      prompt = buildPromptForBlock(weather, aqi, combinedUserInputs, block);
+      blockPlan = await callLLM(prompt);
     }
 
-    const answers = await askUser(allQuestions);
-    combinedUserInputs = { ...combinedUserInputs, ...answers };
-
-    notify("Updating plan based on your input...");
-    prompt = buildPrompt(weather, aqi, combinedUserInputs);
-    dayPlan = await callLLM(prompt);
+    dayPlan.push(...blockPlan);
   }
 
-  notify("Here is your full day plan (6 AM - 10 PM):");
+  notify("Here is your full day plan (6 AM – 10 PM):");
   dayPlan.forEach(block => {
     notify(
       `${block.time} → ${block.activity}\nClothing: ${block.clothing}\nMeal: ${block.meal || "N/A"}\nNotes: ${block.notes || "None"}`
