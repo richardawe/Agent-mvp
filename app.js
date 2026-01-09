@@ -1,98 +1,104 @@
 const API_URL = "https://api.3d7tech.com/v1/chat/completions";
-const API_KEY = "YOUR_API_KEY_HERE"; // if required
+const API_KEY = ""; // Optional if needed
 
-// Mock invoice data (in reality: pulled from accounting system)
-const invoices = [
-  {
-    id: "INV-001",
-    customer: "Acme Ltd",
-    amount: 2400,
-    due_days_ago: 18,
-    prior_reminders: 1,
-    customer_tier: "SMB"
-  },
-  {
-    id: "INV-002",
-    customer: "Globex Corp",
-    amount: 12000,
-    due_days_ago: 45,
-    prior_reminders: 3,
-    customer_tier: "Enterprise"
-  }
-];
+const WEATHER_API = "https://api.open-meteo.com/v1/forecast?latitude=51.5&longitude=-0.12&current_weather=true";
 
-// Core agent prompt
-function buildPrompt(invoice) {
-  return `
-You are an autonomous finance operations agent.
-
-Given this overdue invoice, decide the best action.
-
-Invoice:
-${JSON.stringify(invoice, null, 2)}
-
-Rules:
-- If due_days_ago < 14 → do nothing
-- If due_days_ago between 14–30 → send polite reminder
-- If due_days_ago > 30 OR prior_reminders >= 3 → escalate to human
-- Be conservative with enterprise customers
-
-Respond ONLY in valid JSON:
-{
-  "action": "send_reminder" | "escalate" | "ignore",
-  "message": "string or null",
-  "reason": "short explanation"
-}
-`;
-}
-
-async function callLLM(prompt) {
-  const response = await fetch(API_URL, {
-    method: "POST",
-    headers: {
-      "Content-Type": "application/json",
-      "Authorization": `Bearer ${API_KEY}`
-    },
-    body: JSON.stringify({
-      model: "local-model",
-      messages: [
-        { role: "system", content: "You are a careful, rule-following agent." },
-        { role: "user", content: prompt }
-      ],
-      temperature: 0.2
-    })
-  });
-
-  const data = await response.json();
-  return JSON.parse(data.choices[0].message.content);
-}
-
-function notifyHuman(text) {
+// --- Notifications ---
+function notify(text) {
   const div = document.createElement("div");
   div.className = "notification";
   div.innerText = text;
   document.getElementById("notifications").appendChild(div);
 }
 
+// --- Fetch weather data ---
+async function fetchWeather() {
+  const res = await fetch(WEATHER_API);
+  const data = await res.json();
+  return data.current_weather;
+}
+
+// --- Call local LLM ---
+async function callLLM(prompt) {
+  const res = await fetch(API_URL, {
+    method: "POST",
+    headers: {
+      "Content-Type": "application/json",
+      ...(API_KEY && { "Authorization": `Bearer ${API_KEY}` })
+    },
+    body: JSON.stringify({
+      model: "local-model",
+      messages: [
+        { role: "system", content: "You are a friendly personal assistant agent." },
+        { role: "user", content: prompt }
+      ],
+      temperature: 0.0
+    })
+  });
+  const data = await res.json();
+  return JSON.parse(data.choices[0].message.content);
+}
+
+// --- Build prompt for day planning ---
+function buildPrompt(weather, userInputs = {}) {
+  return `
+You are an autonomous personal assistant agent.
+User is at home watching TV and wants you to plan the day.
+
+Weather: ${JSON.stringify(weather)}
+
+User preferences: ${JSON.stringify(userInputs)}
+
+Rules:
+- Suggest clothing appropriate for the weather
+- Suggest meals for the day
+- Ask questions to clarify user preferences where needed
+- Return only JSON with schema:
+{
+  "clothing": string,
+  "breakfast": string,
+  "lunch": string,
+  "dinner": string,
+  "questions": [ { "question": string, "key": string } ]
+}
+`;
+}
+
+// --- Ask user questions ---
+async function askUser(questions) {
+  const answers = {};
+  for (const q of questions) {
+    const answer = prompt(q.question); // simple browser prompt
+    answers[q.key] = answer;
+  }
+  return answers;
+}
+
+// --- Agent loop ---
 async function runAgent() {
   document.getElementById("notifications").innerHTML = "";
+  notify("Fetching weather...");
+  const weather = await fetchWeather();
+  notify(`Current temperature: ${weather.temperature}°C, wind: ${weather.windspeed} km/h`);
 
-  for (const invoice of invoices) {
-    const prompt = buildPrompt(invoice);
-    const decision = await callLLM(prompt);
+  // Initial plan
+  let prompt = buildPrompt(weather);
+  let plan = await callLLM(prompt);
 
-    if (decision.action === "send_reminder") {
-      notifyHuman(
-        `AUTO-SENT reminder for ${invoice.id}\n\nMessage:\n${decision.message}`
-      );
-    }
-
-    if (decision.action === "escalate") {
-      notifyHuman(
-        `HUMAN ACTION REQUIRED for ${invoice.id}\nReason: ${decision.reason}`
-      );
-    }
+  // If agent asks questions, prompt user
+  if (plan.questions && plan.questions.length > 0) {
+    const userInputs = await askUser(plan.questions);
+    notify("Updating plan based on your input...");
+    prompt = buildPrompt(weather, userInputs);
+    plan = await callLLM(prompt);
   }
+
+  // Display final plan
+  notify("Here is your suggested day plan:");
+  notify(`Clothing: ${plan.clothing}`);
+  notify(`Breakfast: ${plan.breakfast}`);
+  notify(`Lunch: ${plan.lunch}`);
+  notify(`Dinner: ${plan.dinner}`);
 }
 
 document.getElementById("runAgent").addEventListener("click", runAgent);
