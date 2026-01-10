@@ -5,8 +5,17 @@ const REQUEST_TIMEOUT = 45000; // 45 seconds for better responses
 const MAX_RETRIES = 2;
 
 // --- APIs ---
-const WEATHER_API = "https://api.open-meteo.com/v1/forecast?latitude=51.5&longitude=-0.12&current_weather=true&daily=sunrise,sunset";
-const AQI_API = "https://api.waqi.info/feed/london/?token=demo";
+const WEATHER_API_BASE = "https://api.open-meteo.com/v1/forecast";
+const AQI_API_BASE = "https://api.waqi.info/feed";
+const GEOCODING_API = "https://geocoding-api.open-meteo.com/v1/search";
+
+// --- State ---
+let userLocation = {
+  city: "Unknown",
+  latitude: null,
+  longitude: null,
+  country: ""
+};
 
 // --- UI ---
 function notify(text, className = "notification") {
@@ -53,10 +62,69 @@ function fetchWithTimeout(url, options = {}, timeout = REQUEST_TIMEOUT) {
   ]);
 }
 
+// --- Get user's location ---
+async function getUserLocation() {
+  return new Promise((resolve) => {
+    if (!navigator.geolocation) {
+      notify("⚠️ Geolocation not supported, using default location");
+      resolve({ city: "London", latitude: 51.5074, longitude: -0.1278, country: "UK" });
+      return;
+    }
+
+    const statusDiv = notify("📍 Detecting your location...");
+    
+    navigator.geolocation.getCurrentPosition(
+      async (position) => {
+        const lat = position.coords.latitude;
+        const lon = position.coords.longitude;
+        
+        updateNotification(statusDiv, "📍 Location detected, identifying city...");
+        
+        // Reverse geocode to get city name
+        try {
+          const response = await fetchWithTimeout(
+            `https://nominatim.openstreetmap.org/reverse?format=json&lat=${lat}&lon=${lon}`,
+            {
+              headers: {
+                'User-Agent': 'DailyPlannerApp/1.0'
+              }
+            },
+            10000
+          );
+          
+          if (response.ok) {
+            const data = await response.json();
+            const city = data.address.city || data.address.town || data.address.village || data.address.municipality || "Unknown";
+            const country = data.address.country || "";
+            
+            updateNotification(statusDiv, `✅ Location: ${city}, ${country}`);
+            resolve({ city, latitude: lat, longitude: lon, country });
+          } else {
+            throw new Error("Geocoding failed");
+          }
+        } catch (error) {
+          updateNotification(statusDiv, `⚠️ Using coordinates: ${lat.toFixed(2)}, ${lon.toFixed(2)}`);
+          resolve({ city: "Your City", latitude: lat, longitude: lon, country: "" });
+        }
+      },
+      (error) => {
+        updateNotification(statusDiv, "⚠️ Location access denied, using default location (London)");
+        resolve({ city: "London", latitude: 51.5074, longitude: -0.1278, country: "UK" });
+      },
+      {
+        enableHighAccuracy: false,
+        timeout: 10000,
+        maximumAge: 300000 // 5 minutes
+      }
+    );
+  });
+}
+
 // --- Fetch weather ---
-async function fetchWeather() {
+async function fetchWeather(lat, lon) {
   try {
-    const res = await fetchWithTimeout(WEATHER_API, {}, 10000);
+    const url = `${WEATHER_API_BASE}?latitude=${lat}&longitude=${lon}&current_weather=true&daily=sunrise,sunset`;
+    const res = await fetchWithTimeout(url, {}, 10000);
     if (!res.ok) throw new Error(`Weather API error: ${res.status}`);
     const data = await res.json();
     const w = data.current_weather;
@@ -80,9 +148,10 @@ async function fetchWeather() {
 }
 
 // --- Fetch AQI ---
-async function fetchAQI() {
+async function fetchAQI(city) {
   try {
-    const res = await fetchWithTimeout(AQI_API, {}, 10000);
+    const url = `${AQI_API_BASE}/${encodeURIComponent(city)}/?token=demo`;
+    const res = await fetchWithTimeout(url, {}, 10000);
     if (!res.ok) throw new Error(`AQI API error: ${res.status}`);
     const data = await res.json();
     return data.data?.aqi || null;
@@ -196,15 +265,113 @@ async function callLLM(prompt, statusElement, retries = MAX_RETRIES) {
   }
 }
 
+// --- Get social activities for the city ---
+async function getSocialActivities(city, weather, aqi) {
+  const outdoorSafe = (aqi === null || aqi < 100) && weather.precipitation < 3;
+  const temp = weather.temperature;
+  
+  const prompt = `Suggest 5 interesting social activities someone can do in ${city} today.
+
+Current conditions:
+- Weather: ${temp}°C, ${weather.precipitation}mm rain
+- ${outdoorSafe ? 'Good conditions for outdoor activities' : 'Better suited for indoor activities'}
+
+Provide a mix of:
+- Free and paid activities
+- Indoor and outdoor options (based on weather)
+- Activities for different times of day
+- Include specific venues/locations where possible
+
+Return ONLY a JSON array:
+[
+  {
+    "activity": "Specific activity name",
+    "location": "Specific venue or area in ${city}",
+    "cost": "Free" or "£/$/€ amount",
+    "time": "Best time (Morning/Afternoon/Evening)",
+    "description": "Brief description (1-2 sentences)"
+  }
+]`;
+
+  const statusDiv = notify("🎭 Finding social activities in your area...");
+  const result = await callLLM(prompt, statusDiv, 2);
+  
+  return result || getFallbackSocialActivities(city, outdoorSafe);
+}
+
+// --- Fallback social activities ---
+function getFallbackSocialActivities(city, outdoorSafe) {
+  const activities = [
+    {
+      activity: "Visit Local Coffee Shop",
+      location: `Popular cafes in ${city} city center`,
+      cost: "£3-8",
+      time: "Morning/Afternoon",
+      description: "Meet friends for coffee and conversation. Great for casual socializing and people-watching."
+    },
+    {
+      activity: outdoorSafe ? "Walk in City Park" : "Visit Museum or Gallery",
+      location: outdoorSafe ? `Main park in ${city}` : `Local museums in ${city}`,
+      cost: "Free",
+      time: "Afternoon",
+      description: outdoorSafe ? "Enjoy nature and fresh air while catching up with friends." : "Explore local culture and art with interesting exhibitions."
+    },
+    {
+      activity: "Join Community Event or Meetup",
+      location: `Community centers or event spaces in ${city}`,
+      cost: "Free-£10",
+      time: "Evening",
+      description: "Check Meetup.com or Eventbrite for local gatherings based on your interests."
+    },
+    {
+      activity: "Dine at Local Restaurant",
+      location: `Popular dining areas in ${city}`,
+      cost: "£15-40",
+      time: "Evening",
+      description: "Try local cuisine or explore new restaurants with friends or family."
+    },
+    {
+      activity: outdoorSafe ? "Outdoor Sports or Fitness Class" : "Indoor Sports or Gym Session",
+      location: outdoorSafe ? `Parks or sports fields in ${city}` : `Gyms or sports centers in ${city}`,
+      cost: "Free-£15",
+      time: "Morning/Afternoon",
+      description: "Stay active while meeting people with similar fitness interests."
+    }
+  ];
+  
+  return activities;
+}
+
+// --- Format social activities ---
+function formatSocialActivities(activities) {
+  let html = `
+<div style="border: 2px solid #9C27B0; padding: 14px; margin: 20px 0; background: linear-gradient(to right, rgba(156,39,176,0.15), transparent); border-radius: 6px;">
+  <div style="font-size: 1.2em; font-weight: bold; color: #9C27B0; margin-bottom: 12px;">🎭 SOCIAL ACTIVITIES IN ${userLocation.city.toUpperCase()}</div>
+  <div style="color: #666; margin-bottom: 10px; font-style: italic;">Here are some great ways to socialize and explore your city today:</div>
+`;
+
+  activities.forEach((act, index) => {
+    html += `
+  <div style="margin: 10px 0; padding: 10px; background: rgba(255,255,255,0.7); border-radius: 4px; border-left: 3px solid #9C27B0;">
+    <div style="font-weight: bold; color: #9C27B0; margin-bottom: 4px;">${index + 1}. ${act.activity}</div>
+    <div style="margin: 3px 0; font-size: 0.95em;"><strong>📍 Location:</strong> ${act.location}</div>
+    <div style="margin: 3px 0; font-size: 0.95em;"><strong>💰 Cost:</strong> ${act.cost} | <strong>⏰ Best Time:</strong> ${act.time}</div>
+    <div style="margin: 6px 0; font-size: 0.9em; color: #555;">${act.description}</div>
+  </div>
+`;
+  });
+
+  html += `</div>`;
+  return html;
+}
+
 // --- Enhanced prompt for better results ---
-function buildPrompt(weather, aqi, block, previousActivities = []) {
+function buildPrompt(weather, aqi, block, previousActivities = [], city = "your city") {
   const hour = parseInt(block.start.split(':')[0]);
   const timeOfDay = hour < 9 ? "early morning" : hour < 12 ? "mid-morning" : hour < 15 ? "afternoon" : hour < 18 ? "late afternoon" : "evening";
   const outdoorSafe = (aqi === null || aqi < 100) && weather.precipitation < 3;
   
-  const usedActivities = previousActivities.map(a => a.activity.toLowerCase());
-  
-  return `Create a realistic ${timeOfDay} plan for ${block.start}–${block.end}.
+  return `Create a realistic ${timeOfDay} plan for ${block.start}–${block.end} in ${city}.
 
 Current Conditions:
 - Weather: ${weather.temperature}°C, ${weather.precipitation}mm rain, ${weather.windspeed}km/h wind
@@ -219,10 +386,11 @@ Requirements:
 1. Generate 2-3 UNIQUE activities for this ${timeOfDay} block
 2. Each activity must be DIFFERENT from all previous activities today
 3. Be specific and practical - appropriate for ${timeOfDay}
-4. DO NOT include clothing recommendations (handled separately)
-5. Suggest meals/snacks if relevant to the time
-6. Add helpful implementation tips (2-3 sentences)
-7. Make it actionable - not generic suggestions
+4. Consider local context for ${city} where relevant
+5. DO NOT include clothing recommendations (handled separately)
+6. Suggest meals/snacks if relevant to the time
+7. Add helpful implementation tips (2-3 sentences)
+8. Make it actionable - not generic suggestions
 
 Return ONLY a JSON array with this exact structure:
 [
@@ -275,7 +443,6 @@ function getFallbackForBlock(block, weather, aqi, usedActivities = []) {
   else timeCategory = 'evening';
   
   const options = activities[timeCategory];
-  // Pick one that hasn't been used
   for (const option of options) {
     if (!usedActivities.some(used => used.toLowerCase().includes(option.activity.toLowerCase().split(' ').slice(0, 3).join(' ')))) {
       return [{
@@ -287,16 +454,15 @@ function getFallbackForBlock(block, weather, aqi, usedActivities = []) {
     }
   }
   
-  return [options[0]]; // Fallback to first option
+  return [options[0]];
 }
 
 // --- Format activity card ---
-function formatActivityCard(activity, showClothing = false, clothingAdvice = "") {
+function formatActivityCard(activity) {
   return `
 <div style="border-left: 4px solid #2196F3; padding: 12px 16px; margin: 12px 0; background: linear-gradient(to right, rgba(33,150,243,0.1), transparent); border-radius: 4px;">
   <div style="font-size: 1.2em; font-weight: bold; color: #2196F3; margin-bottom: 8px;">⏰ ${activity.time}</div>
   <div style="margin: 6px 0; font-size: 1.05em;"><strong>📌 Activity:</strong> ${activity.activity}</div>
-  ${showClothing ? `<div style="margin: 6px 0; padding: 8px; background: rgba(33,150,243,0.15); border-radius: 4px; color: #555;"><strong>👔 Today's Clothing:</strong> ${clothingAdvice}</div>` : ''}
   ${activity.meal ? `<div style="margin: 6px 0; color: #555;"><strong>🍽️ Meal:</strong> ${activity.meal}</div>` : ''}
   <div style="margin: 8px 0; padding: 8px; background: rgba(0,0,0,0.05); border-radius: 4px; font-size: 0.95em;"><strong>💡 Tips:</strong> ${activity.notes}</div>
 </div>`;
@@ -316,22 +482,31 @@ async function runAgent() {
   notificationContainer.innerHTML = "";
   
   try {
-    notify("🚀 Starting your daily planner...\n");
+    notify("🚀 Starting your personalized daily planner...\n");
     
-    // Fetch data in parallel
-    notify("📡 Fetching weather and air quality data...");
+    // Get user location first
+    userLocation = await getUserLocation();
+    
+    // Fetch weather and AQI for user's location
+    notify("📡 Fetching weather and air quality data for your location...");
     const [weather, aqi] = await Promise.all([
-      fetchWeather(),
-      fetchAQI()
+      fetchWeather(userLocation.latitude, userLocation.longitude),
+      fetchAQI(userLocation.city)
     ]);
 
     notify(`🌤️ Weather: ${weather.temperature}°C, ${weather.precipitation}mm rain, ${weather.windspeed}km/h wind`);
     notify(`🌅 Sunrise: ${weather.sunrise} | 🌇 Sunset: ${weather.sunset}`);
     notify(`🌬️ Air Quality: ${aqi ? `${aqi} AQI` : 'Good conditions'}\n`);
 
+    // Get social activities
+    const socialActivities = await getSocialActivities(userLocation.city, weather, aqi);
+    if (socialActivities && socialActivities.length > 0) {
+      notifyHTML(formatSocialActivities(socialActivities));
+    }
+
     // Generate clothing recommendation once
     const clothingAdvice = generateClothingRecommendation(weather, aqi);
-    const clothingDiv = notifyHTML(`
+    notifyHTML(`
 <div style="border: 2px solid #FF9800; padding: 14px; margin: 14px 0; background: linear-gradient(to right, rgba(255,152,0,0.15), transparent); border-radius: 6px;">
   <div style="font-size: 1.1em; font-weight: bold; color: #FF9800; margin-bottom: 6px;">👔 TODAY'S CLOTHING RECOMMENDATION</div>
   <div style="color: #555; line-height: 1.6;">${clothingAdvice}</div>
@@ -363,8 +538,8 @@ async function runAgent() {
       
       const statusDiv = notify("⏳ Preparing to generate plan...");
       
-      // Build prompt with context
-      const prompt = buildPrompt(weather, aqi, block, allActivities);
+      // Build prompt with context and city
+      const prompt = buildPrompt(weather, aqi, block, allActivities, userLocation.city);
       
       // Call LLM
       const blockPlan = await callLLM(prompt, statusDiv);
@@ -372,7 +547,7 @@ async function runAgent() {
       // Display results immediately
       if (blockPlan && Array.isArray(blockPlan) && blockPlan.length > 0) {
         for (const activity of blockPlan) {
-          notifyHTML(formatActivityCard(activity, false, ""));
+          notifyHTML(formatActivityCard(activity));
           allActivities.push(activity);
           
           // Small delay for visual effect
@@ -383,7 +558,7 @@ async function runAgent() {
         const usedActivities = allActivities.map(a => a.activity);
         const fallback = getFallbackForBlock(block, weather, aqi, usedActivities);
         for (const activity of fallback) {
-          notifyHTML(formatActivityCard(activity, false, ""));
+          notifyHTML(formatActivityCard(activity));
           allActivities.push(activity);
         }
       }
@@ -395,7 +570,7 @@ async function runAgent() {
     }
 
     notify("\n━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━");
-    const summaryDiv = notify(`✅ Your daily plan is complete! Generated ${allActivities.length} unique activities.`);
+    const summaryDiv = notify(`✅ Your daily plan for ${userLocation.city} is complete! Generated ${allActivities.length} unique activities.`);
     summaryDiv.style.fontWeight = "bold";
     summaryDiv.style.color = "#4CAF50";
     notify("━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━");
