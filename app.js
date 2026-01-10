@@ -1,12 +1,12 @@
 // --- Config ---
 const API_URL = "https://api.3d7tech.com/v1/chat/completions";
-const API_KEY = ""; // Optional if needed for your local LLM
+const API_KEY = ""; // Optional
 
-// --- Public APIs ---
+// --- APIs ---
 const WEATHER_API = "https://api.open-meteo.com/v1/forecast?latitude=51.5&longitude=-0.12&current_weather=true&daily=sunrise,sunset";
-const AQI_API = "https://api.waqi.info/feed/london/?token=demo"; // Example public AQI token
+const AQI_API = "https://api.waqi.info/feed/london/?token=demo";
 
-// --- UI Helpers ---
+// --- UI ---
 function notify(text) {
   const div = document.createElement("div");
   div.className = "notification";
@@ -14,14 +14,18 @@ function notify(text) {
   document.getElementById("notifications").appendChild(div);
 }
 
-// --- Fetch weather + sunrise/sunset ---
+// --- Fetch weather ---
 async function fetchWeather() {
   const res = await fetch(WEATHER_API);
   const data = await res.json();
-  const current = data.current_weather;
-  const sunrise = data.daily.sunrise[0];
-  const sunset = data.daily.sunset[0];
-  return { ...current, sunrise, sunset };
+  const w = data.current_weather;
+  return {
+    temperature: w.temperature,
+    precipitation: w.precipitation,
+    windspeed: w.windspeed,
+    sunrise: data.daily.sunrise[0],
+    sunset: data.daily.sunset[0]
+  };
 }
 
 // --- Fetch AQI ---
@@ -31,7 +35,7 @@ async function fetchAQI() {
     const data = await res.json();
     return data.data.aqi;
   } catch {
-    return null; // fallback
+    return null;
   }
 }
 
@@ -46,18 +50,33 @@ async function callLLM(prompt) {
     body: JSON.stringify({
       model: "local-model",
       messages: [
-        { role: "system", content: "You are a friendly personal assistant agent planning the user's day." },
+        { role: "system", content: "You are a friendly personal assistant agent." },
         { role: "user", content: prompt }
       ],
       temperature: 0.0
     })
   });
-
   const data = await res.json();
   return JSON.parse(data.choices[0].message.content);
 }
 
-// --- Ask user for input ---
+// --- Prompt builder per block ---
+function buildPrompt(weather, aqi, block, userInputs = {}) {
+  return `
+Plan the user's activities for ${block.start}–${block.end} based on:
+Weather: ${JSON.stringify(weather)}
+AQI: ${aqi}
+User preferences so far: ${JSON.stringify(userInputs)}
+
+Rules:
+- Suggest clothing, meals, and activities
+- Avoid outdoor if AQI > 100 or rain
+- Return JSON array with fields: time, activity, clothing, meal, notes
+- No extra text
+`;
+}
+
+// --- Ask user ---
 async function askUser(questions) {
   const answers = {};
   for (const q of questions) {
@@ -67,49 +86,18 @@ async function askUser(questions) {
   return answers;
 }
 
-// --- Build LLM prompt for a single block ---
-function buildPromptForBlock(weather, aqi, userInputs = {}, block) {
-  return `
-You are an autonomous personal assistant.
-Plan the user's activities, clothing, meals, and notes for ${block.start} – ${block.end}.
-Use this weather + AQI data: ${JSON.stringify(weather)}, AQI: ${aqi}.
-User preferences so far: ${JSON.stringify(userInputs)}
-
-Rules:
-- Suggest clothing appropriate for weather and AQI
-- Suggest meals if they fall in this block
-- Suggest leisure, exercise, errands, and indoor/outdoor activities
-- Avoid outdoor activities if AQI > 100 or rain
-- Ask questions if you need user preferences
-- Return ONLY valid JSON array with schema:
-[
-  {
-    "time": string,
-    "activity": string,
-    "clothing": string,
-    "meal": string|null,
-    "notes": string|null,
-    "questions": [ { "question": string, "key": string } ] // optional
-  }
-]
-`;
-}
-
 // --- Main agent loop ---
 async function runAgent() {
   document.getElementById("notifications").innerHTML = "";
-
-  notify("Fetching weather and sunrise/sunset...");
+  notify("Fetching weather...");
   const weather = await fetchWeather();
-  notify(`Temperature: ${weather.temperature}°C, Wind: ${weather.windspeed} km/h`);
+  notify(`Temp: ${weather.temperature}°C, Precipitation: ${weather.precipitation}, Wind: ${weather.windspeed}`);
   notify(`Sunrise: ${weather.sunrise}, Sunset: ${weather.sunset}`);
 
-  notify("Fetching Air Quality Index...");
+  notify("Fetching AQI...");
   const aqi = await fetchAQI();
-  if (aqi !== null) notify(`AQI: ${aqi}`);
-  else notify("AQI data not available");
+  notify(aqi ? `AQI: ${aqi}` : "AQI not available");
 
-  // Define 3-hour blocks
   const blocks = [
     { start: "6:00", end: "9:00" },
     { start: "9:00", end: "12:00" },
@@ -120,32 +108,22 @@ async function runAgent() {
   ];
 
   let dayPlan = [];
-  let combinedUserInputs = {};
+  let userInputs = {};
 
   for (const block of blocks) {
-    notify(`Planning ${block.start} – ${block.end}...`);
-    let prompt = buildPromptForBlock(weather, aqi, combinedUserInputs, block);
+    notify(`Planning ${block.start}–${block.end}...`);
+    const prompt = buildPrompt(weather, aqi, block, userInputs);
     let blockPlan = await callLLM(prompt);
 
-    // Ask questions for this block if any
-    const questions = blockPlan.flatMap(b => b.questions || []).filter(q => !combinedUserInputs[q.key]);
-    if (questions.length > 0) {
-      const answers = await askUser(questions);
-      combinedUserInputs = { ...combinedUserInputs, ...answers };
-
-      notify(`Updating plan for ${block.start} – ${block.end} based on your input...`);
-      prompt = buildPromptForBlock(weather, aqi, combinedUserInputs, block);
-      blockPlan = await callLLM(prompt);
-    }
+    // Ask questions if block has any (optional for future extension)
+    // userInputs can be merged here for next block
 
     dayPlan.push(...blockPlan);
   }
 
-  notify("Here is your full day plan (6 AM – 10 PM):");
-  dayPlan.forEach(block => {
-    notify(
-      `${block.time} → ${block.activity}\nClothing: ${block.clothing}\nMeal: ${block.meal || "N/A"}\nNotes: ${block.notes || "None"}`
-    );
+  notify("Full day plan:");
+  dayPlan.forEach(b => {
+    notify(`${b.time} → ${b.activity}\nClothing: ${b.clothing}\nMeal: ${b.meal || "N/A"}\nNotes: ${b.notes || "None"}`);
   });
 }
 
