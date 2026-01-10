@@ -1,11 +1,12 @@
 // --- Config ---
 const API_URL = "https://api.3d7tech.com/v1/chat/completions";
 const API_KEY = ""; // Optional
-const REQUEST_TIMEOUT = 45000; // 45 seconds for better quality responses
-const MAX_RETRIES = 3;
+const REQUEST_TIMEOUT = 60000; // 60 seconds
+const MAX_RETRIES = 2; // Reduced retries
+const BATCH_SIZE = 2; // Process 2 blocks at once instead of 6 separate calls
 
 // --- APIs ---
-const WEATHER_API = "https://api.open-meteo.com/v1/forecast?latitude=51.5&longitude=-0.12&current_weather=true&hourly=temperature_2m,precipitation_probability,windspeed_10m&daily=sunrise,sunset,temperature_2m_max,temperature_2m_min";
+const WEATHER_API = "https://api.open-meteo.com/v1/forecast?latitude=51.5&longitude=-0.12&current_weather=true&daily=sunrise,sunset";
 const AQI_API = "https://api.waqi.info/feed/london/?token=demo";
 
 // --- UI ---
@@ -24,103 +25,73 @@ function notify(text, isHtml = false) {
   }
 }
 
-// --- Timeout wrapper ---
+// --- Timeout wrapper with abort controller ---
 function fetchWithTimeout(url, options = {}, timeout = REQUEST_TIMEOUT) {
-  return Promise.race([
-    fetch(url, options),
-    new Promise((_, reject) =>
-      setTimeout(() => reject(new Error('Request timeout')), timeout)
-    )
-  ]);
+  const controller = new AbortController();
+  const timeoutId = setTimeout(() => controller.abort(), timeout);
+  
+  return fetch(url, { ...options, signal: controller.signal })
+    .finally(() => clearTimeout(timeoutId));
 }
 
-// --- Enhanced weather fetch ---
+// --- Fetch weather ---
 async function fetchWeather() {
   try {
-    const res = await fetchWithTimeout(WEATHER_API);
-    if (!res.ok) throw new Error(`Weather API error: ${res.status}`);
+    const res = await fetchWithTimeout(WEATHER_API, {}, 10000);
+    if (!res.ok) throw new Error(`HTTP ${res.status}`);
     const data = await res.json();
     const w = data.current_weather;
-    
-    // Get hourly data for better planning
-    const hourly = data.hourly;
-    const daily = data.daily;
-    
     return {
-      current: {
-        temperature: w.temperature || 0,
-        precipitation: w.precipitation || 0,
-        windspeed: w.windspeed || 0,
-        weathercode: w.weathercode || 0
-      },
-      hourly: {
-        temperature: hourly?.temperature_2m?.slice(0, 24) || [],
-        precipitation: hourly?.precipitation_probability?.slice(0, 24) || [],
-        windspeed: hourly?.windspeed_10m?.slice(0, 24) || []
-      },
-      daily: {
-        sunrise: daily?.sunrise?.[0] || "06:00",
-        sunset: daily?.sunset?.[0] || "18:00",
-        temp_max: daily?.temperature_2m_max?.[0] || 20,
-        temp_min: daily?.temperature_2m_min?.[0] || 10
-      },
-      description: getWeatherDescription(w.weathercode || 0)
+      temp: w.temperature || 15,
+      precip: w.precipitation || 0,
+      wind: w.windspeed || 5,
+      code: w.weathercode || 0,
+      sunrise: data.daily?.sunrise?.[0] || "06:00",
+      sunset: data.daily?.sunset?.[0] || "18:00",
+      desc: getWeatherDesc(w.weathercode || 0)
     };
   } catch (error) {
-    notify(`Weather fetch failed: ${error.message}`);
-    return {
-      current: { temperature: 15, precipitation: 0, windspeed: 5, weathercode: 0 },
-      hourly: { temperature: [], precipitation: [], windspeed: [] },
-      daily: { sunrise: "06:00", sunset: "18:00", temp_max: 20, temp_min: 10 },
-      description: "Clear"
-    };
+    notify(`⚠️ Weather fetch failed, using defaults`);
+    return { temp: 15, precip: 0, wind: 5, code: 0, sunrise: "06:00", sunset: "18:00", desc: "Clear" };
   }
 }
 
-// --- Weather code to description ---
-function getWeatherDescription(code) {
-  const codes = {
-    0: "Clear sky", 1: "Mainly clear", 2: "Partly cloudy", 3: "Overcast",
-    45: "Foggy", 48: "Foggy", 51: "Light drizzle", 53: "Drizzle", 55: "Heavy drizzle",
-    61: "Light rain", 63: "Rain", 65: "Heavy rain", 71: "Light snow", 
-    73: "Snow", 75: "Heavy snow", 95: "Thunderstorm"
-  };
-  return codes[code] || "Unknown";
+function getWeatherDesc(code) {
+  if (code === 0) return "Clear";
+  if (code <= 3) return "Cloudy";
+  if (code <= 48) return "Fog";
+  if (code <= 67) return "Rain";
+  if (code <= 77) return "Snow";
+  return "Storms";
 }
 
 // --- Fetch AQI ---
 async function fetchAQI() {
   try {
-    const res = await fetchWithTimeout(AQI_API);
-    if (!res.ok) throw new Error(`AQI API error: ${res.status}`);
+    const res = await fetchWithTimeout(AQI_API, {}, 10000);
+    if (!res.ok) throw new Error(`HTTP ${res.status}`);
     const data = await res.json();
     const aqi = data.data?.aqi || null;
-    return {
-      value: aqi,
-      quality: getAQIQuality(aqi)
-    };
+    return { val: aqi, safe: !aqi || aqi < 100 };
   } catch (error) {
-    notify(`AQI fetch failed: ${error.message}`);
-    return { value: null, quality: "Unknown" };
+    notify(`⚠️ AQI fetch failed, assuming safe`);
+    return { val: null, safe: true };
   }
 }
 
-// --- AQI quality description ---
-function getAQIQuality(aqi) {
-  if (!aqi) return "Unknown";
-  if (aqi <= 50) return "Good";
-  if (aqi <= 100) return "Moderate";
-  if (aqi <= 150) return "Unhealthy for sensitive groups";
-  if (aqi <= 200) return "Unhealthy";
-  if (aqi <= 300) return "Very unhealthy";
-  return "Hazardous";
-}
-
-// --- Enhanced LLM call ---
+// --- Streamlined LLM call ---
 async function callLLM(prompt, retries = MAX_RETRIES) {
   for (let attempt = 1; attempt <= retries; attempt++) {
     try {
-      const res = await fetchWithTimeout(API_URL, {
+      notify(`🤖 LLM request ${attempt}/${retries}...`);
+      
+      const controller = new AbortController();
+      const timeoutId = setTimeout(() => {
+        controller.abort();
+        notify(`⏱️ Request timed out after ${REQUEST_TIMEOUT/1000}s`);
+      }, REQUEST_TIMEOUT);
+
+      const res = await fetch(API_URL, {
         method: "POST",
         headers: {
           "Content-Type": "application/json",
@@ -131,217 +102,250 @@ async function callLLM(prompt, retries = MAX_RETRIES) {
           messages: [
             { 
               role: "system", 
-              content: "You are an expert daily planning assistant. Provide detailed, practical, and personalized recommendations. Always respond with valid JSON only, no markdown or extra text." 
+              content: "You are a daily planner. Respond ONLY with valid JSON array. Be concise but helpful." 
             },
             { role: "user", content: prompt }
           ],
-          temperature: 0.7, // Increased for more creative/detailed responses
-          max_tokens: 2000 // Ensure enough tokens for detailed responses
-        })
+          temperature: 0.5,
+          max_tokens: 1500
+        }),
+        signal: controller.signal
       });
 
-      if (!res.ok) throw new Error(`LLM API error: ${res.status}`);
+      clearTimeout(timeoutId);
+
+      if (!res.ok) {
+        const errorText = await res.text().catch(() => 'Unknown error');
+        throw new Error(`HTTP ${res.status}: ${errorText}`);
+      }
       
       const data = await res.json();
       const content = data.choices?.[0]?.message?.content;
       
-      if (!content) throw new Error("Empty response from LLM");
+      if (!content) throw new Error("Empty response");
 
-      // Clean up response
-      const cleanContent = content.replace(/```json\n?|\n?```|```\n?/g, '').trim();
+      // Clean response
+      let cleanContent = content.trim();
+      cleanContent = cleanContent.replace(/```json\s*/g, '').replace(/```\s*/g, '');
+      cleanContent = cleanContent.replace(/^[^[\{]*/, '').replace(/[^}\]]*$/, '');
       
-      return JSON.parse(cleanContent);
+      const parsed = JSON.parse(cleanContent);
+      notify(`✅ LLM responded successfully`);
+      return parsed;
+      
     } catch (error) {
-      notify(`LLM attempt ${attempt}/${retries} failed: ${error.message}`);
+      const errorMsg = error.name === 'AbortError' ? 'Request timeout' : error.message;
+      notify(`❌ Attempt ${attempt} failed: ${errorMsg}`);
+      
       if (attempt === retries) {
-        return [{
-          time: "All day",
-          activity: "Plan generation unavailable",
-          clothing: "Dress appropriately for weather",
-          meal: "Regular meals",
-          notes: "LLM service unavailable. Please check API configuration.",
-          details: "Unable to generate detailed recommendations."
-        }];
+        notify(`⚠️ Using fallback plan after ${retries} attempts`);
+        return null;
       }
-      await new Promise(resolve => setTimeout(resolve, 2000 * attempt));
+      
+      // Wait before retry
+      await new Promise(resolve => setTimeout(resolve, 3000 * attempt));
     }
   }
+  return null;
 }
 
-// --- Enhanced prompt builder ---
-function buildPrompt(weather, aqi, block, previousActivities = [], userContext = {}) {
-  const hour = parseInt(block.start.split(':')[0]);
-  const isEarlyMorning = hour >= 5 && hour < 9;
-  const isMorning = hour >= 9 && hour < 12;
-  const isAfternoon = hour >= 12 && hour < 17;
-  const isEvening = hour >= 17 && hour < 21;
-  const isNight = hour >= 21 || hour < 5;
+// --- Concise prompt ---
+function buildCompactPrompt(weather, aqi, blocks) {
+  const outdoorOk = aqi.safe && weather.precip < 3 && weather.wind < 35;
+  
+  return `Plan activities for these times: ${blocks.map(b => b.start + '-' + b.end).join(', ')}
 
-  const outdoorSafe = (aqi.value === null || aqi.value < 100) && 
-                      weather.current.precipitation < 5 && 
-                      weather.current.windspeed < 40;
+Weather: ${weather.temp}°C, ${weather.desc}, Wind ${weather.wind}km/h, Rain ${weather.precip}mm
+Air Quality: ${aqi.val || 'Good'} (${outdoorOk ? 'outdoor OK' : 'stay indoors'})
+Daylight: ${weather.sunrise} to ${weather.sunset}
 
-  return `You are planning activities for ${block.start}–${block.end} on a ${new Date().toLocaleDateString('en-US', { weekday: 'long' })}.
+For EACH time block, suggest 1-2 activities with:
+- Specific activity matching time of day
+- Practical clothing for ${weather.temp}°C
+- Meal if appropriate for that time
+- Brief helpful tip
+- Why this activity (1 sentence)
 
-CONTEXT:
-━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
-Weather Conditions:
-• Current: ${weather.current.temperature}°C, ${weather.description}
-• Day Range: ${weather.daily.temp_min}°C to ${weather.daily.temp_max}°C
-• Precipitation: ${weather.current.precipitation}mm
-• Wind: ${weather.current.windspeed} km/h
-• Sunrise: ${weather.daily.sunrise} | Sunset: ${weather.daily.sunset}
+Return JSON array:
+[{"time":"HH:MM","activity":"...","clothing":"...","meal":"..." or null,"notes":"...","why":"..."}]
 
-Air Quality:
-• AQI: ${aqi.value || "Unknown"} (${aqi.quality})
-• Outdoor Safety: ${outdoorSafe ? "✓ Safe" : "⚠ Use caution"}
-
-Time Period: ${isEarlyMorning ? "Early Morning" : isMorning ? "Morning" : isAfternoon ? "Afternoon" : isEvening ? "Evening" : "Night"}
-
-Previous Activities Today:
-${previousActivities.length > 0 ? previousActivities.map(a => `• ${a.time}: ${a.activity}`).join('\n') : "• None yet (start of day)"}
-
-REQUIREMENTS:
-━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
-Generate 2-3 activities for this time block with:
-
-1. SPECIFIC activities with clear purpose and benefits
-2. DETAILED clothing recommendations (fabrics, layers, accessories)
-3. NUTRITIOUS meal suggestions with reasoning
-4. PRACTICAL tips and safety considerations
-5. VARIETY - don't repeat similar activities from previous blocks
-
-Guidelines:
-• ${outdoorSafe ? "Outdoor activities encouraged" : "Focus on indoor activities"}
-• Match energy levels to time of day
-• Consider weather comfort (dress for ${weather.current.temperature}°C)
-• Include wellness aspects (hydration, breaks, posture)
-• Be specific about WHY each recommendation matters
-
-RESPONSE FORMAT (JSON array only):
-[
-  {
-    "time": "HH:MM",
-    "activity": "Specific activity name with clear purpose",
-    "clothing": "Detailed clothing recommendation with fabrics/layers/accessories",
-    "meal": "Specific meal/snack with nutritional reasoning or null",
-    "notes": "Practical implementation tips",
-    "details": "Why this activity? Health benefits, timing rationale, safety considerations (2-3 sentences)"
-  }
-]
-
-IMPORTANT: 
-- NO markdown formatting, NO code blocks, NO extra text
-- Return ONLY the JSON array
-- Make it useful and actionable
-- Each activity should feel personalized and well-reasoned`;
+Rules:
+- ${outdoorOk ? 'Outdoor activities encouraged' : 'Focus indoors'}
+- Match energy to time (morning=active, evening=relaxed)
+- Be specific and practical
+- Each activity should be different
+- JSON only, no extra text`;
 }
 
-// --- Format output beautifully ---
-function formatActivityCard(activity) {
+// --- Fallback plan ---
+function getFallbackPlan(blocks, weather, aqi) {
+  const plans = blocks.map(block => {
+    const hour = parseInt(block.start.split(':')[0]);
+    
+    if (hour >= 6 && hour < 9) {
+      return {
+        time: "07:00",
+        activity: "Morning routine and light breakfast",
+        clothing: `Light layers for ${weather.temp}°C indoors`,
+        meal: "Oatmeal with fruit and coffee",
+        notes: "Start the day gently",
+        why: "Morning energy boost"
+      };
+    } else if (hour >= 9 && hour < 12) {
+      return {
+        time: "10:00",
+        activity: aqi.safe && weather.precip < 2 ? "Morning walk or outdoor exercise" : "Indoor workout or stretching",
+        clothing: `${weather.temp > 15 ? 'Light' : 'Warm'} athletic wear`,
+        meal: "Hydration break with water",
+        notes: "Get moving while fresh",
+        why: "Peak alertness time"
+      };
+    } else if (hour >= 12 && hour < 15) {
+      return {
+        time: "12:30",
+        activity: "Lunch and midday break",
+        clothing: "Comfortable casual wear",
+        meal: "Balanced lunch with protein and vegetables",
+        notes: "Take proper break from work",
+        why: "Refuel and recharge"
+      };
+    } else if (hour >= 15 && hour < 18) {
+      return {
+        time: "15:30",
+        activity: "Afternoon productive time or errands",
+        clothing: `Weather-appropriate: ${weather.temp}°C ${weather.desc}`,
+        meal: "Light snack if needed",
+        notes: "Second wind of the day",
+        why: "Good focus period"
+      };
+    } else if (hour >= 18 && hour < 21) {
+      return {
+        time: "19:00",
+        activity: "Dinner and evening relaxation",
+        clothing: "Comfortable home clothes",
+        meal: "Hearty dinner",
+        notes: "Wind down from day",
+        why: "Rest and digest"
+      };
+    } else {
+      return {
+        time: "21:30",
+        activity: "Evening routine and prepare for bed",
+        clothing: "Sleepwear",
+        meal: null,
+        notes: "Limit screens before sleep",
+        why: "Quality rest is crucial"
+      };
+    }
+  });
+  
+  return plans;
+}
+
+// --- Format output ---
+function formatActivity(activity) {
   return `
-<div style="border-left: 4px solid #4CAF50; padding: 12px; margin: 10px 0; background: rgba(255,255,255,0.05); border-radius: 4px;">
-  <div style="font-size: 1.2em; font-weight: bold; color: #4CAF50;">⏰ ${activity.time}</div>
-  <div style="margin: 8px 0;">
-    <strong>📌 Activity:</strong> ${activity.activity}
-  </div>
-  <div style="margin: 8px 0;">
-    <strong>👔 Clothing:</strong> ${activity.clothing}
-  </div>
-  ${activity.meal ? `<div style="margin: 8px 0;"><strong>🍽️ Meal:</strong> ${activity.meal}</div>` : ''}
-  <div style="margin: 8px 0;">
-    <strong>📝 Tips:</strong> ${activity.notes}
-  </div>
-  ${activity.details ? `<div style="margin: 8px 0; padding: 8px; background: rgba(0,0,0,0.2); border-radius: 4px; font-style: italic;"><strong>💡 Why:</strong> ${activity.details}</div>` : ''}
+<div style="border-left: 4px solid #4CAF50; padding: 12px; margin: 10px 0; background: rgba(76,175,80,0.1); border-radius: 4px;">
+  <div style="font-size: 1.1em; font-weight: bold; color: #4CAF50;">⏰ ${activity.time}</div>
+  <div style="margin: 6px 0;"><strong>📌</strong> ${activity.activity}</div>
+  <div style="margin: 6px 0;"><strong>👔</strong> ${activity.clothing}</div>
+  ${activity.meal ? `<div style="margin: 6px 0;"><strong>🍽️</strong> ${activity.meal}</div>` : ''}
+  <div style="margin: 6px 0;"><strong>📝</strong> ${activity.notes}</div>
+  <div style="margin: 6px 0; font-style: italic; opacity: 0.9;"><strong>💡</strong> ${activity.why}</div>
 </div>`;
 }
 
-// --- Main agent loop ---
+// --- Main agent ---
 async function runAgent() {
-  const notificationContainer = document.getElementById("notifications");
-  const runButton = document.getElementById("runAgent");
+  const container = document.getElementById("notifications");
+  const button = document.getElementById("runAgent");
   
-  if (!notificationContainer || !runButton) {
-    console.error("Required DOM elements not found");
+  if (!container || !button) {
+    console.error("Required elements missing");
     return;
   }
 
-  runButton.disabled = true;
-  notificationContainer.innerHTML = "";
+  button.disabled = true;
+  container.innerHTML = "";
   
   try {
-    notify("🚀 Starting enhanced daily planner agent...");
+    notify("🚀 Starting daily planner...\n");
     
-    notify("📡 Fetching comprehensive weather and air quality data...");
+    // Fetch data in parallel with short timeout
     const [weather, aqi] = await Promise.all([
       fetchWeather(),
       fetchAQI()
     ]);
 
-    notify(`🌤️ Weather: ${weather.current.temperature}°C (${weather.description}), Range: ${weather.daily.temp_min}–${weather.daily.temp_max}°C`);
-    notify(`💨 Wind: ${weather.current.windspeed}km/h | ☔ Precip: ${weather.current.precipitation}mm`);
-    notify(`🌅 Sunrise: ${weather.daily.sunrise} | 🌇 Sunset: ${weather.daily.sunset}`);
-    notify(`🌬️ Air Quality: ${aqi.value || "Unknown"} (${aqi.quality})`);
+    notify(`🌤️ ${weather.temp}°C, ${weather.desc} | 💨 ${weather.wind}km/h | ☔ ${weather.precip}mm`);
+    notify(`🌬️ AQI: ${aqi.val || 'Unknown'} (${aqi.safe ? 'Safe' : 'Caution'})\n`);
 
     const blocks = [
-      { start: "06:00", end: "09:00", name: "Early Morning" },
-      { start: "09:00", end: "12:00", name: "Morning" },
-      { start: "12:00", end: "15:00", name: "Afternoon" },
-      { start: "15:00", end: "18:00", name: "Late Afternoon" },
-      { start: "18:00", end: "21:00", name: "Evening" },
-      { start: "21:00", end: "23:00", name: "Night" }
+      { start: "06:00", end: "09:00" },
+      { start: "09:00", end: "12:00" },
+      { start: "12:00", end: "15:00" },
+      { start: "15:00", end: "18:00" },
+      { start: "18:00", end: "21:00" },
+      { start: "21:00", end: "23:00" }
     ];
 
+    notify(`🤖 Generating plan (this may take 30-60 seconds)...\n`);
+
+    // Try batched approach first
     let dayPlan = [];
-    let allActivities = [];
+    let usedFallback = false;
 
-    for (let i = 0; i < blocks.length; i++) {
-      const block = blocks[i];
-      notify(`\n⏳ Planning ${block.name} (${block.start}–${block.end})...`);
+    // Process in batches
+    for (let i = 0; i < blocks.length; i += BATCH_SIZE) {
+      const batch = blocks.slice(i, i + BATCH_SIZE);
+      notify(`⏳ Planning ${batch[0].start}-${batch[batch.length-1].end}...`);
       
-      const prompt = buildPrompt(weather, aqi, block, allActivities);
-      const blockPlan = await callLLM(prompt);
-
-      if (Array.isArray(blockPlan)) {
-        dayPlan.push(...blockPlan);
-        allActivities.push(...blockPlan);
-      } else if (blockPlan) {
-        dayPlan.push(blockPlan);
-        allActivities.push(blockPlan);
+      const prompt = buildCompactPrompt(weather, aqi, batch);
+      const result = await callLLM(prompt);
+      
+      if (result && Array.isArray(result)) {
+        dayPlan.push(...result);
+      } else {
+        notify(`⚠️ Using fallback for this block`);
+        dayPlan.push(...getFallbackPlan(batch, weather, aqi));
+        usedFallback = true;
       }
-
-      // Small delay between requests to avoid rate limiting
-      if (i < blocks.length - 1) {
-        await new Promise(resolve => setTimeout(resolve, 1000));
+      
+      // Brief pause between batches
+      if (i + BATCH_SIZE < blocks.length) {
+        await new Promise(r => setTimeout(r, 2000));
       }
     }
 
-    notify("\n\n━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━");
-    notify("✨ YOUR PERSONALIZED DAILY PLAN ✨");
-    notify("━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━\n");
+    // Display results
+    notify("\n━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━");
+    notify("✨ YOUR DAILY PLAN ✨");
+    notify("━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━\n");
     
     dayPlan.forEach(activity => {
-      notify(formatActivityCard(activity), true);
+      notify(formatActivity(activity), true);
     });
 
-    notify("\n━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━");
-    notify(`✅ Complete! Generated ${dayPlan.length} personalized activities for your day.`);
-    notify("━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━");
+    notify("\n━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━");
+    notify(`✅ Plan complete! ${dayPlan.length} activities generated`);
+    if (usedFallback) {
+      notify(`ℹ️ Note: Some activities are fallback suggestions due to LLM issues`);
+    }
+    notify("━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━");
 
   } catch (error) {
-    notify(`❌ Fatal error: ${error.message}`);
+    notify(`❌ Error: ${error.message}`);
     console.error("Agent error:", error);
   } finally {
-    runButton.disabled = false;
+    button.disabled = false;
   }
 }
 
-// --- Bind UI ---
+// --- Init ---
 document.addEventListener('DOMContentLoaded', () => {
-  const runButton = document.getElementById("runAgent");
-  if (runButton) {
-    runButton.addEventListener("click", runAgent);
-  } else {
-    console.error("Run button not found");
+  const button = document.getElementById("runAgent");
+  if (button) {
+    button.addEventListener("click", runAgent);
+    notify("💡 Tip: First run may take longer as LLM initializes");
   }
 });
