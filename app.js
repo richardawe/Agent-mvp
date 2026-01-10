@@ -43,19 +43,6 @@ function updateNotification(element, text) {
   }
 }
 
-// --- Streaming text animation ---
-async function streamText(element, text, speed = 20) {
-  element.innerText = "";
-  for (let i = 0; i < text.length; i++) {
-    element.innerText += text[i];
-    if (i % 5 === 0) { // Update scroll periodically
-      const container = document.getElementById("notifications");
-      if (container) container.scrollTop = container.scrollHeight;
-    }
-    await new Promise(resolve => setTimeout(resolve, speed));
-  }
-}
-
 // --- Timeout wrapper ---
 function fetchWithTimeout(url, options = {}, timeout = REQUEST_TIMEOUT) {
   return Promise.race([
@@ -105,6 +92,60 @@ async function fetchAQI() {
   }
 }
 
+// --- Generate daily clothing recommendation ---
+function generateClothingRecommendation(weather, aqi) {
+  const temp = weather.temperature;
+  const hasRain = weather.precipitation > 2;
+  const isWindy = weather.windspeed > 25;
+  
+  let layers = [];
+  let accessories = [];
+  
+  // Base layer
+  if (temp < 5) {
+    layers.push("thermal underwear and warm base layers");
+  } else if (temp < 15) {
+    layers.push("long-sleeve shirt or light sweater");
+  } else {
+    layers.push("breathable cotton or linen shirt");
+  }
+  
+  // Mid layer
+  if (temp < 10) {
+    layers.push("insulated fleece or wool sweater");
+  } else if (temp < 18) {
+    layers.push("light cardigan or hoodie for layering");
+  }
+  
+  // Outer layer
+  if (hasRain) {
+    layers.push("waterproof rain jacket");
+    accessories.push("umbrella");
+  } else if (isWindy) {
+    layers.push("windbreaker or light jacket");
+  } else if (temp < 12) {
+    layers.push("warm coat or jacket");
+  }
+  
+  // Accessories
+  if (temp < 8) {
+    accessories.push("scarf", "gloves", "warm hat");
+  } else if (temp < 15 && isWindy) {
+    accessories.push("light scarf");
+  }
+  
+  if (temp > 20) {
+    accessories.push("sunglasses", "sun hat");
+  }
+  
+  // Footwear
+  let footwear = hasRain ? "waterproof boots or shoes" : temp < 10 ? "warm closed-toe shoes or boots" : "comfortable walking shoes or sneakers";
+  
+  const clothingAdvice = `${layers.join(", ")}. Footwear: ${footwear}${accessories.length > 0 ? `. Accessories: ${accessories.join(", ")}` : ""}.`;
+  
+  return clothingAdvice;
+}
+
 // --- Call local LLM with retry ---
 async function callLLM(prompt, statusElement, retries = MAX_RETRIES) {
   for (let attempt = 1; attempt <= retries; attempt++) {
@@ -122,11 +163,11 @@ async function callLLM(prompt, statusElement, retries = MAX_RETRIES) {
           messages: [
             { 
               role: "system", 
-              content: "You are a practical daily planning assistant. Provide sensible, detailed recommendations in valid JSON format only. No markdown, no extra text." 
+              content: "You are a practical daily planning assistant. Provide sensible, detailed, and VARIED recommendations in valid JSON format only. Never repeat the same activity twice. No markdown, no extra text." 
             },
             { role: "user", content: prompt }
           ],
-          temperature: 0.6,
+          temperature: 0.7,
           max_tokens: 1200
         })
       });
@@ -161,96 +202,101 @@ function buildPrompt(weather, aqi, block, previousActivities = []) {
   const timeOfDay = hour < 9 ? "early morning" : hour < 12 ? "mid-morning" : hour < 15 ? "afternoon" : hour < 18 ? "late afternoon" : "evening";
   const outdoorSafe = (aqi === null || aqi < 100) && weather.precipitation < 3;
   
-  const context = previousActivities.length > 0 
-    ? `\nPrevious activities today: ${previousActivities.slice(-2).map(a => a.activity).join(', ')}`
-    : '';
-
+  const usedActivities = previousActivities.map(a => a.activity.toLowerCase());
+  
   return `Create a realistic ${timeOfDay} plan for ${block.start}–${block.end}.
 
 Current Conditions:
 - Weather: ${weather.temperature}°C, ${weather.precipitation}mm rain, ${weather.windspeed}km/h wind
 - Air Quality: ${aqi || 'Good'} ${outdoorSafe ? '(outdoor activities OK)' : '(stay indoors recommended)'}
-- Daylight: Sunrise ${weather.sunrise}, Sunset ${weather.sunset}${context}
+- Daylight: Sunrise ${weather.sunrise}, Sunset ${weather.sunset}
+
+${previousActivities.length > 0 ? `Activities already planned today:\n${previousActivities.map(a => `• ${a.time}: ${a.activity}`).join('\n')}\n` : ''}
+
+CRITICAL: DO NOT repeat any of these activities. Create completely NEW and DIFFERENT activities.
 
 Requirements:
-1. Generate 2-3 specific activities for this time block
-2. Each activity should be practical and appropriate for ${timeOfDay}
-3. Include detailed clothing advice for ${weather.temperature}°C conditions
-4. Suggest meals/snacks if relevant to the time
-5. Add helpful implementation tips
-6. Make recommendations sensible and actionable (not generic one-liners)
+1. Generate 2-3 UNIQUE activities for this ${timeOfDay} block
+2. Each activity must be DIFFERENT from all previous activities today
+3. Be specific and practical - appropriate for ${timeOfDay}
+4. DO NOT include clothing recommendations (handled separately)
+5. Suggest meals/snacks if relevant to the time
+6. Add helpful implementation tips (2-3 sentences)
+7. Make it actionable - not generic suggestions
 
 Return ONLY a JSON array with this exact structure:
 [
   {
     "time": "HH:MM",
-    "activity": "Specific activity description (be detailed, 10-15 words)",
-    "clothing": "Practical clothing recommendation with layers/fabrics",
+    "activity": "Specific NEW activity description (be detailed, 10-20 words)",
     "meal": "Specific meal/snack suggestion" or null,
-    "notes": "Helpful tip for this activity (2-3 sentences with practical advice)"
+    "notes": "Helpful practical advice for this activity (2-3 sentences)"
   }
 ]
 
 ${outdoorSafe ? 'Prioritize outdoor activities where appropriate.' : 'Focus on indoor activities due to weather/air quality.'}
 Match energy levels to ${timeOfDay} (morning=energetic, evening=relaxing).
-Be specific - avoid generic suggestions like "go for a walk" - say WHERE or HOW.`;
+IMPORTANT: Ensure VARIETY - no repetition of activity types from earlier in the day.`;
 }
 
 // --- Fallback plan generator ---
-function getFallbackForBlock(block, weather, aqi) {
+function getFallbackForBlock(block, weather, aqi, usedActivities = []) {
   const hour = parseInt(block.start.split(':')[0]);
   const outdoorSafe = (aqi === null || aqi < 100) && weather.precipitation < 3;
   
-  if (hour >= 6 && hour < 9) {
-    return [{
-      time: "07:00",
-      activity: "Morning wake-up routine with light stretching or yoga",
-      clothing: `Light indoor layers suitable for ${weather.temperature}°C`,
-      meal: "Balanced breakfast with protein and whole grains",
-      notes: "Start the day gently. Hydrate well and consider a 10-minute stretching session to wake up your body."
-    }];
-  } else if (hour >= 9 && hour < 12) {
-    return [{
-      time: "10:00",
-      activity: outdoorSafe ? "Brisk 30-minute walk in local park or neighborhood" : "Indoor cardio workout or home exercise routine",
-      clothing: outdoorSafe ? `Weather-appropriate activewear for ${weather.temperature}°C with windbreaker` : "Comfortable athletic wear",
-      meal: "Mid-morning snack like fruit or nuts",
-      notes: "Peak productivity hours. If outdoors, take advantage of morning light. If indoors, ensure good ventilation."
-    }];
-  } else if (hour >= 12 && hour < 15) {
-    return [{
-      time: "12:30",
-      activity: "Nutritious lunch break with proper rest from work",
-      clothing: "Comfortable casual wear",
-      meal: "Well-balanced lunch with lean protein, vegetables, and complex carbs",
-      notes: "Take a full break from screens. Consider a short 15-minute walk after eating to aid digestion."
-    }];
-  } else if (hour >= 15 && hour < 18) {
-    return [{
-      time: "15:30",
-      activity: outdoorSafe ? "Outdoor errands or light activity" : "Indoor productive tasks or creative work",
-      clothing: `Layer appropriately for ${weather.temperature}°C`,
-      meal: "Light afternoon snack to maintain energy",
-      notes: "Good time for focused work or errands. Stay hydrated and take regular breaks."
-    }];
-  } else {
-    return [{
-      time: "18:30",
-      activity: "Prepare and enjoy evening meal, followed by relaxation",
-      clothing: "Comfortable home clothes",
-      meal: "Hearty dinner with balanced nutrition",
-      notes: "Wind down from the day. Limit screen time before bed and consider calming activities like reading."
-    }];
+  const activities = {
+    morning: [
+      { activity: "Morning wake-up routine with gentle stretching and hydration", meal: "Balanced breakfast with protein, whole grains, and fruit", notes: "Start slowly. Do 10 minutes of light stretching to wake up your muscles. Drink a full glass of water before breakfast." },
+      { activity: "Review daily goals and plan your schedule over morning beverage", meal: "Coffee or tea with a light snack", notes: "Take 15 minutes to organize your day. Write down 3 priority tasks to accomplish." }
+    ],
+    midMorning: [
+      { activity: outdoorSafe ? "30-minute brisk walk in local park or scenic neighborhood route" : "Home workout session: bodyweight exercises and yoga flow", meal: "Mid-morning fruit or protein snack", notes: "Peak energy time. If walking, maintain a brisk pace. If indoors, focus on form over speed." },
+      { activity: "Focused work session on important tasks requiring concentration", meal: "Herbal tea and healthy snack", notes: "Tackle your most challenging work now. Use 25-minute focused intervals with 5-minute breaks." }
+    ],
+    afternoon: [
+      { activity: "Nutritious lunch preparation and mindful eating break", meal: "Well-balanced lunch with lean protein, vegetables, and complex carbs", notes: "Take a full 30-minute break. Eat slowly and away from screens to aid digestion." },
+      { activity: outdoorSafe ? "Afternoon errands or outdoor shopping trip" : "Creative hobby time: reading, writing, or learning something new", meal: "Light afternoon snack", notes: "Good time for less demanding tasks. Stay hydrated and take short breaks every hour." }
+    ],
+    lateAfternoon: [
+      { activity: "Household organization or meal prep for evening", meal: "Healthy afternoon snack to maintain energy", notes: "Prepare for evening. Tidy up and prep ingredients for dinner to reduce evening stress." },
+      { activity: outdoorSafe ? "Leisurely outdoor stroll or visit to local shops" : "Indoor relaxation: music, podcasts, or light entertainment", meal: "Tea or light refreshment", notes: "Wind down from productive hours. Engage in low-stress activities." }
+    ],
+    evening: [
+      { activity: "Prepare and enjoy a relaxing evening meal with good company or entertainment", meal: "Hearty dinner with balanced nutrition", notes: "Take time to cook something enjoyable. Eat mindfully and savor your food." },
+      { activity: "Evening wind-down routine: light reading, journaling, or calming activities", meal: "Herbal tea if desired", notes: "Avoid screens 30 minutes before bed. Consider meditation or gentle stretching." }
+    ]
+  };
+  
+  let timeCategory;
+  if (hour >= 6 && hour < 9) timeCategory = 'morning';
+  else if (hour >= 9 && hour < 12) timeCategory = 'midMorning';
+  else if (hour >= 12 && hour < 15) timeCategory = 'afternoon';
+  else if (hour >= 15 && hour < 18) timeCategory = 'lateAfternoon';
+  else timeCategory = 'evening';
+  
+  const options = activities[timeCategory];
+  // Pick one that hasn't been used
+  for (const option of options) {
+    if (!usedActivities.some(used => used.toLowerCase().includes(option.activity.toLowerCase().split(' ').slice(0, 3).join(' ')))) {
+      return [{
+        time: block.start,
+        activity: option.activity,
+        meal: option.meal,
+        notes: option.notes
+      }];
+    }
   }
+  
+  return [options[0]]; // Fallback to first option
 }
 
 // --- Format activity card ---
-function formatActivityCard(activity) {
+function formatActivityCard(activity, showClothing = false, clothingAdvice = "") {
   return `
 <div style="border-left: 4px solid #2196F3; padding: 12px 16px; margin: 12px 0; background: linear-gradient(to right, rgba(33,150,243,0.1), transparent); border-radius: 4px;">
   <div style="font-size: 1.2em; font-weight: bold; color: #2196F3; margin-bottom: 8px;">⏰ ${activity.time}</div>
   <div style="margin: 6px 0; font-size: 1.05em;"><strong>📌 Activity:</strong> ${activity.activity}</div>
-  <div style="margin: 6px 0; color: #555;"><strong>👔 Clothing:</strong> ${activity.clothing}</div>
+  ${showClothing ? `<div style="margin: 6px 0; padding: 8px; background: rgba(33,150,243,0.15); border-radius: 4px; color: #555;"><strong>👔 Today's Clothing:</strong> ${clothingAdvice}</div>` : ''}
   ${activity.meal ? `<div style="margin: 6px 0; color: #555;"><strong>🍽️ Meal:</strong> ${activity.meal}</div>` : ''}
   <div style="margin: 8px 0; padding: 8px; background: rgba(0,0,0,0.05); border-radius: 4px; font-size: 0.95em;"><strong>💡 Tips:</strong> ${activity.notes}</div>
 </div>`;
@@ -283,6 +329,15 @@ async function runAgent() {
     notify(`🌅 Sunrise: ${weather.sunrise} | 🌇 Sunset: ${weather.sunset}`);
     notify(`🌬️ Air Quality: ${aqi ? `${aqi} AQI` : 'Good conditions'}\n`);
 
+    // Generate clothing recommendation once
+    const clothingAdvice = generateClothingRecommendation(weather, aqi);
+    const clothingDiv = notifyHTML(`
+<div style="border: 2px solid #FF9800; padding: 14px; margin: 14px 0; background: linear-gradient(to right, rgba(255,152,0,0.15), transparent); border-radius: 6px;">
+  <div style="font-size: 1.1em; font-weight: bold; color: #FF9800; margin-bottom: 6px;">👔 TODAY'S CLOTHING RECOMMENDATION</div>
+  <div style="color: #555; line-height: 1.6;">${clothingAdvice}</div>
+</div>
+    `);
+
     // Define 3-hour blocks
     const blocks = [
       { start: "06:00", end: "09:00", name: "Early Morning" },
@@ -294,7 +349,7 @@ async function runAgent() {
 
     let allActivities = [];
 
-    notify("━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━\n");
+    notify("\n━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━\n");
 
     // Process each block with instant display
     for (let i = 0; i < blocks.length; i++) {
@@ -317,7 +372,7 @@ async function runAgent() {
       // Display results immediately
       if (blockPlan && Array.isArray(blockPlan) && blockPlan.length > 0) {
         for (const activity of blockPlan) {
-          const activityDiv = notifyHTML(formatActivityCard(activity));
+          notifyHTML(formatActivityCard(activity, false, ""));
           allActivities.push(activity);
           
           // Small delay for visual effect
@@ -325,9 +380,10 @@ async function runAgent() {
         }
       } else {
         notify("⚠️ Using fallback plan for this block");
-        const fallback = getFallbackForBlock(block, weather, aqi);
+        const usedActivities = allActivities.map(a => a.activity);
+        const fallback = getFallbackForBlock(block, weather, aqi, usedActivities);
         for (const activity of fallback) {
-          notifyHTML(formatActivityCard(activity));
+          notifyHTML(formatActivityCard(activity, false, ""));
           allActivities.push(activity);
         }
       }
@@ -339,7 +395,7 @@ async function runAgent() {
     }
 
     notify("\n━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━");
-    const summaryDiv = notify(`✅ Your daily plan is complete! Generated ${allActivities.length} activities.`);
+    const summaryDiv = notify(`✅ Your daily plan is complete! Generated ${allActivities.length} unique activities.`);
     summaryDiv.style.fontWeight = "bold";
     summaryDiv.style.color = "#4CAF50";
     notify("━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━");
