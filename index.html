@@ -28,6 +28,10 @@
         <h1>AI Daily Planner</h1>
       </div>
       <p class="tagline">Your intelligent assistant for a perfectly planned day</p>
+      <div id="locationDisplay" class="location-display" style="display: none;">
+        <span class="location-icon">📍</span>
+        <span id="locationText">Loading location...</span>
+      </div>
     </header>
 
     <div class="action-section">
@@ -39,7 +43,152 @@
       <p class="hint">Powered by AI • Weather-aware • Location-based</p>
     </div>
 
-    <div id="notifications" class="notifications-container"></div>
+    <!-- Queue Status Indicator (Hidden initially) -->
+    <div id="queueStatus" class="queue-status" style="display: none;">
+      <div class="queue-status-content">
+        <div class="queue-icon">⏳</div>
+        <div class="queue-info">
+          <p class="queue-title">Processing your request...</p>
+          <p class="queue-message" id="queueMessage">Please wait, this may take a moment due to high demand.</p>
+          <div class="queue-progress">
+            <div class="queue-progress-bar">
+              <div class="queue-progress-fill" id="queueProgressFill"></div>
+            </div>
+            <span class="queue-position" id="queuePosition">Queue position: -</span>
+          </div>
+        </div>
+      </div>
+    </div>
+
+    <!-- Progress Indicator (Hidden initially) -->
+    <div id="progressIndicator" class="progress-indicator" style="display: none;">
+      <div class="progress-bar">
+        <div class="progress-fill" id="progressFill"></div>
+      </div>
+      <p class="progress-text"><span id="progressCount">0</span> / 5 time periods complete</p>
+    </div>
+
+    <!-- Plan Grid Container -->
+    <div id="planGrid" class="plan-grid" style="display: none;">
+      <!-- Cards will be generated dynamically -->
+    </div>
+
+    <!-- Info Cards (Clothing, Social Activities & Events) -->
+    <div id="infoCards" class="info-cards-container" style="display: none;">
+      <div id="clothingCard" class="info-card">
+        <div class="info-card-header">
+          <h3>👔 Clothing Recommendation</h3>
+        </div>
+        <div class="info-card-content" id="clothingContent">
+          <p>Loading...</p>
+        </div>
+      </div>
+      <div id="socialCard" class="info-card">
+        <div class="info-card-header">
+          <h3>🎭 Social Activities in <span id="socialCityName">Your City</span></h3>
+        </div>
+        <div class="info-card-content" id="socialContent">
+          <p>Loading...</p>
+        </div>
+      </div>
+      <div id="eventsCard" class="info-card">
+        <div class="info-card-header">
+          <h3>📰 Local Events & News in <span id="eventsCityName">Your City</span></h3>
+        </div>
+        <div class="info-card-content" id="eventsContent">
+          <p>Loading...</p>
+        </div>
+      </div>
+    </div>
+
+    <!-- Modify Plan Button (Floating) -->
+    <button id="modifyPlanBtn" class="modify-plan-btn" style="display: none;" aria-label="Modify Plan">
+      <span class="button-icon">🎯</span>
+      <span class="button-text">Modify Plan</span>
+    </button>
+
+    <!-- Modify Plan Modal -->
+    <div id="modifyModal" class="modal" style="display: none;">
+      <div class="modal-backdrop" id="modalBackdrop"></div>
+      <div class="modal-content">
+        <div class="modal-header">
+          <h2>🎯 Modify Your Plan</h2>
+          <button class="modal-close" id="modalClose" aria-label="Close Modal">×</button>
+        </div>
+        
+        <div class="modal-body">
+          <div class="modal-status" id="modalStatus">
+            <p><strong>Location:</strong> <span id="modalLocation">-</span></p>
+            <p><strong>Weather:</strong> <span id="modalWeather">-</span></p>
+          </div>
+
+          <div class="modal-options">
+            <div class="modal-option-group">
+              <label>
+                <input type="radio" name="modifyType" value="all" checked id="modifyAll">
+                <span>Modify Entire Plan</span>
+              </label>
+              <label>
+                <input type="radio" name="modifyType" value="block" id="modifyBlock">
+                <span>Modify Specific Block</span>
+              </label>
+              <label>
+                <input type="radio" name="modifyType" value="location" id="modifyLocation">
+                <span>Change Location</span>
+              </label>
+            </div>
+
+            <div id="blockSelector" class="block-selector" style="display: none;">
+              <label for="blockSelect">Select Time Block:</label>
+              <select id="blockSelect" class="block-select">
+                <option value="0">Early Morning (06:00-09:00)</option>
+                <option value="1">Mid Morning (09:00-12:00)</option>
+                <option value="2">Afternoon (12:00-15:00)</option>
+                <option value="3">Late Afternoon (15:00-18:00)</option>
+                <option value="4">Evening (18:00-21:00)</option>
+              </select>
+            </div>
+
+            <div id="locationInput" class="location-input-group" style="display: none;">
+              <label for="newLocation">New City Name:</label>
+              <input type="text" id="newLocation" class="location-input" placeholder="e.g., Paris, New York, Tokyo...">
+            </div>
+          </div>
+
+          <div class="modal-instruction-section">
+            <label for="instructionInput">Your Instructions:</label>
+            <textarea 
+              id="instructionInput" 
+              class="instruction-input" 
+              placeholder="e.g., Make it more active, focus on indoor activities, make evening more social, prefer free activities, add more cultural activities..."
+              rows="4"
+            ></textarea>
+          </div>
+
+          <div class="instruction-examples">
+            <span class="examples-label">Quick Options:</span>
+            <button class="example-chip" data-example="Make it more active and energetic">More active</button>
+            <button class="example-chip" data-example="Focus on indoor activities only">Indoor only</button>
+            <button class="example-chip" data-example="Make evening more social">Social evening</button>
+            <button class="example-chip" data-example="Prefer free or low-cost activities">Budget-friendly</button>
+            <button class="example-chip" data-example="Add more relaxation and self-care time">More relaxation</button>
+            <button class="example-chip" data-example="Include cultural and historical sites">Cultural focus</button>
+          </div>
+        </div>
+
+        <div class="modal-footer">
+          <button id="stopGeneration" class="modal-btn stop-btn" style="display: none;">
+            <span class="button-icon">⏹️</span>
+            <span class="button-text">Stop Generation</span>
+          </button>
+          <button id="applyInstruction" class="modal-btn apply-btn">
+            <span class="button-icon">🔄</span>
+            <span class="button-text">Apply Changes</span>
+          </button>
+          <button class="modal-btn cancel-btn" id="modalCancel">Cancel</button>
+        </div>
+      </div>
+    </div>
 
     <footer class="footer">
       <p>Built with ❤️ using AI & Real-time Data</p>
