@@ -2,14 +2,50 @@
 <html lang="en">
 <head>
   <meta charset="UTF-8">
-  <title>TV Mode Day Planner</title>
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>AI Daily Planner - Plan Your Perfect Day</title>
   <link rel="stylesheet" href="style.css">
+  <link rel="preconnect" href="https://fonts.googleapis.com">
+  <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+  <link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700;800&family=Space+Grotesk:wght@500;700&display=swap" rel="stylesheet">
 </head>
 <body>
-  <h1>Autonomous Day Planner</h1>
-  <button id="runAgent">Plan My Day</button>
-  <div id="notifications"></div>
+  <div class="background-gradient"></div>
+  <div class="container">
+    <header class="header">
+      <div class="logo">
+        <svg width="40" height="40" viewBox="0 0 40 40" fill="none" xmlns="http://www.w3.org/2000/svg">
+          <circle cx="20" cy="20" r="18" fill="url(#gradient)" opacity="0.2"/>
+          <path d="M20 8V20L26 26" stroke="url(#gradient)" stroke-width="3" stroke-linecap="round" stroke-linejoin="round"/>
+          <circle cx="20" cy="20" r="16" stroke="url(#gradient)" stroke-width="2"/>
+          <defs>
+            <linearGradient id="gradient" x1="0" y1="0" x2="40" y2="40">
+              <stop offset="0%" stop-color="#667eea"/>
+              <stop offset="100%" stop-color="#764ba2"/>
+            </linearGradient>
+          </defs>
+        </svg>
+        <h1>AI Daily Planner</h1>
+      </div>
+      <p class="tagline">Your intelligent assistant for a perfectly planned day</p>
+    </header>
 
-  <script src="app.js?v=20260109"></script>
+    <div class="action-section">
+      <button id="runAgent" class="cta-button">
+        <span class="button-icon">✨</span>
+        <span class="button-text">Plan My Day</span>
+        <span class="button-shine"></span>
+      </button>
+      <p class="hint">Powered by AI • Weather-aware • Location-based</p>
+    </div>
+
+    <div id="notifications" class="notifications-container"></div>
+
+    <footer class="footer">
+      <p>Built with ❤️ using AI & Real-time Data</p>
+    </footer>
+  </div>
+  
+  <script src="app.js?v=20260110"></script>
 </body>
 </html>
