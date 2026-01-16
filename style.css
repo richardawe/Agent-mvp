@@ -132,6 +132,27 @@ body {
   animation: fadeInUp 0.8s ease-out 0.2s both;
 }
 
+.hub-buttons {
+  display: flex;
+  gap: 20px;
+  justify-content: center;
+  flex-wrap: wrap;
+  margin-bottom: 20px;
+}
+
+.valentine-button {
+  background: linear-gradient(135deg, #e91e63 0%, #f06292 100%) !important;
+  box-shadow: 
+    0 10px 25px rgba(233, 30, 99, 0.4),
+    0 4px 8px rgba(0, 0, 0, 0.1) !important;
+}
+
+.valentine-button:hover {
+  box-shadow: 
+    0 15px 35px rgba(233, 30, 99, 0.5),
+    0 6px 12px rgba(0, 0, 0, 0.15) !important;
+}
+
 .cta-button {
   position: relative;
   padding: 18px 48px;
@@ -1318,5 +1339,361 @@ body {
   .instruction-input {
     font-size: 0.95rem;
     padding: 12px;
+  }
+}
+
+/* Valentine's Day Styles */
+.valentine-container {
+  max-width: 1200px;
+  margin: 0 auto;
+  padding: 40px 20px;
+  animation: fadeIn 0.6s ease-out;
+}
+
+.valentine-header {
+  text-align: center;
+  margin-bottom: 40px;
+}
+
+.valentine-header h2 {
+  font-family: 'Space Grotesk', sans-serif;
+  font-size: clamp(2rem, 4vw, 2.5rem);
+  font-weight: 700;
+  background: linear-gradient(135deg, #e91e63 0%, #f06292 100%);
+  -webkit-background-clip: text;
+  -webkit-text-fill-color: transparent;
+  background-clip: text;
+  margin-bottom: 12px;
+}
+
+.valentine-location {
+  color: rgba(255, 255, 255, 0.9);
+  font-size: 1.125rem;
+  font-weight: 500;
+}
+
+.valentine-sections {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(300px, 1fr));
+  gap: 24px;
+  margin-top: 32px;
+}
+
+.valentine-section {
+  background: rgba(255, 255, 255, 0.95);
+  backdrop-filter: blur(10px);
+  border-radius: 20px;
+  padding: 28px;
+  box-shadow: 0 10px 30px rgba(0, 0, 0, 0.2);
+  transition: transform 0.3s ease, box-shadow 0.3s ease;
+  border: 2px solid rgba(233, 30, 99, 0.1);
+}
+
+.valentine-section:hover {
+  transform: translateY(-4px);
+  box-shadow: 0 15px 40px rgba(233, 30, 99, 0.3);
+}
+
+.valentine-section-header {
+  margin-bottom: 20px;
+  padding-bottom: 16px;
+  border-bottom: 2px solid rgba(233, 30, 99, 0.2);
+}
+
+.valentine-section-header {
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+}
+
+.valentine-section-header h3 {
+  font-family: 'Space Grotesk', sans-serif;
+  font-size: 1.5rem;
+  font-weight: 700;
+  color: #e91e63;
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  margin: 0;
+}
+
+.view-locations-btn {
+  padding: 8px 16px;
+  font-size: 0.875rem;
+  font-weight: 600;
+  color: #e91e63;
+  background: rgba(233, 30, 99, 0.1);
+  border: 2px solid rgba(233, 30, 99, 0.3);
+  border-radius: 8px;
+  cursor: pointer;
+  transition: all 0.3s ease;
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  font-family: 'Inter', sans-serif;
+}
+
+.view-locations-btn:hover {
+  background: rgba(233, 30, 99, 0.2);
+  border-color: rgba(233, 30, 99, 0.5);
+  transform: translateY(-2px);
+}
+
+.view-locations-btn .button-icon {
+  font-size: 1rem;
+}
+
+.view-locations-btn .button-text {
+  font-size: 0.875rem;
+}
+
+.valentine-section-content {
+  color: var(--text-primary);
+  line-height: 1.8;
+  font-size: 1rem;
+}
+
+.valentine-section-content .loading-text {
+  color: var(--text-secondary);
+  font-style: italic;
+  text-align: center;
+  padding: 20px;
+}
+
+.valentine-section-content h4 {
+  color: #e91e63;
+  font-size: 1.2rem;
+  font-weight: 600;
+  margin-top: 20px;
+  margin-bottom: 12px;
+}
+
+.valentine-section-content h4:first-child {
+  margin-top: 0;
+}
+
+.valentine-section-content p {
+  margin-bottom: 12px;
+}
+
+.valentine-section-content ul,
+.valentine-section-content ol {
+  margin-left: 20px;
+  margin-bottom: 16px;
+}
+
+.valentine-section-content li {
+  margin-bottom: 8px;
+}
+
+.valentine-section-content strong {
+  color: #e91e63;
+  font-weight: 600;
+}
+
+.poem-block {
+  background: linear-gradient(135deg, rgba(233, 30, 99, 0.05) 0%, rgba(240, 98, 146, 0.05) 100%);
+  padding: 20px;
+  border-radius: 12px;
+  margin-bottom: 20px;
+  border-left: 4px solid #e91e63;
+  font-style: italic;
+  line-height: 1.9;
+}
+
+.restaurant-item,
+.activity-item {
+  background: rgba(255, 255, 255, 0.7);
+  padding: 16px;
+  border-radius: 12px;
+  margin-bottom: 16px;
+  border: 1px solid rgba(233, 30, 99, 0.2);
+}
+
+.restaurant-item h5,
+.activity-item h5 {
+  color: #e91e63;
+  font-size: 1.1rem;
+  font-weight: 600;
+  margin-bottom: 8px;
+}
+
+.restaurant-item p,
+.activity-item p {
+  margin-bottom: 6px;
+  font-size: 0.95rem;
+}
+
+.booking-tip {
+  background: rgba(255, 193, 7, 0.1);
+  padding: 16px;
+  border-radius: 12px;
+  margin-bottom: 16px;
+  border-left: 4px solid #ffc107;
+}
+
+.booking-tip strong {
+  color: #f57c00;
+  display: block;
+  margin-bottom: 8px;
+}
+
+/* Locations Modal Styles */
+.locations-modal-content {
+  max-width: 800px;
+  max-height: 90vh;
+  overflow-y: auto;
+}
+
+.locations-list {
+  display: flex;
+  flex-direction: column;
+  gap: 16px;
+}
+
+.location-item {
+  background: rgba(255, 255, 255, 0.95);
+  border: 2px solid rgba(233, 30, 99, 0.2);
+  border-radius: 12px;
+  padding: 20px;
+  transition: all 0.3s ease;
+}
+
+.location-item:hover {
+  border-color: rgba(233, 30, 99, 0.5);
+  box-shadow: 0 4px 12px rgba(233, 30, 99, 0.2);
+  transform: translateY(-2px);
+}
+
+.location-item-header {
+  display: flex;
+  justify-content: space-between;
+  align-items: flex-start;
+  margin-bottom: 12px;
+}
+
+.location-item-name {
+  font-size: 1.2rem;
+  font-weight: 700;
+  color: #e91e63;
+  margin: 0;
+  flex: 1;
+}
+
+.location-item-type {
+  display: inline-block;
+  padding: 4px 12px;
+  background: rgba(233, 30, 99, 0.1);
+  color: #e91e63;
+  border-radius: 20px;
+  font-size: 0.75rem;
+  font-weight: 600;
+  text-transform: uppercase;
+  margin-left: 12px;
+}
+
+.location-item-address {
+  color: var(--text-secondary);
+  font-size: 0.95rem;
+  margin-bottom: 8px;
+  display: flex;
+  align-items: center;
+  gap: 8px;
+}
+
+.location-item-address .icon {
+  color: #e91e63;
+  font-size: 1rem;
+}
+
+.location-item-full-address {
+  color: var(--text-secondary);
+  font-size: 0.875rem;
+  font-style: italic;
+  margin-top: 8px;
+  padding-top: 8px;
+  border-top: 1px solid rgba(233, 30, 99, 0.1);
+}
+
+.location-item-actions {
+  margin-top: 12px;
+  display: flex;
+  gap: 8px;
+}
+
+.location-action-btn {
+  padding: 8px 16px;
+  font-size: 0.875rem;
+  font-weight: 600;
+  color: #ffffff;
+  background: linear-gradient(135deg, #e91e63 0%, #f06292 100%);
+  border: none;
+  border-radius: 8px;
+  cursor: pointer;
+  transition: all 0.3s ease;
+  text-decoration: none;
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+}
+
+.location-action-btn:hover {
+  transform: translateY(-2px);
+  box-shadow: 0 4px 12px rgba(233, 30, 99, 0.4);
+}
+
+.location-action-btn.secondary {
+  background: rgba(233, 30, 99, 0.1);
+  color: #e91e63;
+  border: 2px solid rgba(233, 30, 99, 0.3);
+}
+
+.location-action-btn.secondary:hover {
+  background: rgba(233, 30, 99, 0.2);
+}
+
+@media (max-width: 768px) {
+  .valentine-sections {
+    grid-template-columns: 1fr;
+  }
+
+  .hub-buttons {
+    flex-direction: column;
+    align-items: center;
+  }
+
+  .hub-buttons .cta-button {
+    width: 100%;
+    max-width: 400px;
+  }
+
+  .valentine-section-header {
+    flex-direction: column;
+    align-items: flex-start;
+    gap: 12px;
+  }
+
+  .view-locations-btn {
+    width: 100%;
+    justify-content: center;
+  }
+
+  .location-item-header {
+    flex-direction: column;
+    gap: 8px;
+  }
+
+  .location-item-type {
+    margin-left: 0;
+    align-self: flex-start;
+  }
+
+  .location-item-actions {
+    flex-direction: column;
+  }
+
+  .location-action-btn {
+    width: 100%;
+    justify-content: center;
   }
 }

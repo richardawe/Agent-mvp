@@ -923,6 +923,52 @@ function generateClothingRecommendation(weather, aqi) {
   return clothingAdvice;
 }
 
+// --- Call local LLM for text responses (not JSON) ---
+async function callLLMText(prompt, retries = MAX_RETRIES) {
+  for (let attempt = 1; attempt <= retries; attempt++) {
+    try {
+      const abortController = new AbortController();
+      
+      const res = await fetchWithTimeout(API_URL, {
+        method: "POST",
+        headers: {
+          "Content-Type": "application/json",
+          ...(API_KEY && { "Authorization": `Bearer ${API_KEY}` })
+        },
+        body: JSON.stringify({
+          model: "local-model",
+          messages: [
+            { 
+              role: "system", 
+              content: "You are a helpful assistant. Provide clear, well-formatted text responses. Use markdown formatting when appropriate." 
+            },
+            { role: "user", content: prompt }
+          ],
+          temperature: 0.8,
+          max_tokens: 2000
+        }),
+        signal: abortController.signal
+      });
+
+      if (!res.ok) throw new Error(`LLM API error: ${res.status}`);
+      
+      const data = await res.json();
+      const content = data.choices?.[0]?.message?.content;
+      
+      if (!content) throw new Error("Empty response from LLM");
+
+      return content.trim();
+    } catch (error) {
+      if (attempt === retries) {
+        console.log("❌ LLM text generation failed:", error);
+        return null;
+      }
+      await new Promise(resolve => setTimeout(resolve, 500 * attempt));
+    }
+  }
+  return null;
+}
+
 // --- Call local LLM with retry and abort support ---
 async function callLLM(prompt, cardElement = null, retries = MAX_RETRIES) {
   for (let attempt = 1; attempt <= retries; attempt++) {
@@ -2358,6 +2404,722 @@ async function runAgent() {
   }
 }
 
+// --- Valentine's Day Functions ---
+
+// Get romantic restaurants for Valentine's Day
+async function getRomanticRestaurants(city, country = "") {
+  try {
+    let useNearbySearch = false;
+    let lat = null;
+    let lon = null;
+    let actualCity = city;
+    
+    if (city.includes(',') && !isNaN(parseFloat(city.split(',')[0]))) {
+      const parts = city.split(',');
+      lat = parseFloat(parts[0].trim());
+      lon = parseFloat(parts[1].trim());
+      if (!isNaN(lat) && !isNaN(lon)) {
+        useNearbySearch = true;
+        // Try to get city name from coordinates
+        try {
+          const response = await apiQueue.enqueue(async () => {
+            return await fetchWithTimeout(
+              `https://nominatim.openstreetmap.org/reverse?format=json&lat=${lat}&lon=${lon}&addressdetails=1&zoom=10`,
+              {
+                headers: {
+                  'User-Agent': 'DailyPlannerApp/1.0',
+                  'Accept-Language': 'en'
+                }
+              },
+              15000
+            );
+          }, 'Reverse Geocoding (Valentine)', false);
+          
+          if (response.ok) {
+            const data = await response.json();
+            const address = data.address || {};
+            actualCity = address.city || address.town || address.village || address.municipality || address.county || city;
+          }
+        } catch (e) {
+          console.log("Reverse geocoding failed, using coordinates");
+        }
+      }
+    }
+    
+    // Always include city name in query to filter results
+    const cityQuery = `${actualCity}${country ? `, ${country}` : ''}`;
+    const romanticCategories = [
+      { query: `restaurant ${cityQuery}`, type: 'restaurant' },
+      { query: `fine dining ${cityQuery}`, type: 'fine_dining' },
+      { query: `wine bar ${cityQuery}`, type: 'wine_bar' },
+      { query: `italian restaurant ${cityQuery}`, type: 'italian' },
+      { query: `french restaurant ${cityQuery}`, type: 'french' }
+    ];
+
+    const restaurants = [];
+    
+    const restaurantPromises = romanticCategories.map(async (cat) => {
+      try {
+        let apiUrl;
+        if (useNearbySearch && lat && lon) {
+          apiUrl = `${PLACES_API_BASE}?q=${encodeURIComponent(cat.query)}&format=json&limit=3&addressdetails=1&lat=${lat}&lon=${lon}&radius=5000`;
+        } else {
+          apiUrl = `${PLACES_API_BASE}?q=${encodeURIComponent(cat.query)}&format=json&limit=2&addressdetails=1`;
+        }
+        
+        const response = await apiQueue.enqueue(async () => {
+          return await fetchWithTimeout(
+            apiUrl,
+            {
+              headers: {
+                'User-Agent': 'DailyPlannerApp/1.0'
+              }
+            },
+            8000
+          );
+        }, `Restaurant Search (${cat.type})`, false);
+        
+        if (response.ok) {
+          const data = await response.json();
+          if (data && data.length > 0) {
+            // Filter results to ensure they're in the target city
+            const filtered = data.filter(place => {
+              const displayName = place.display_name.toLowerCase();
+              const address = place.address || {};
+              const cityLower = actualCity.toLowerCase();
+              
+              // Check if the place is in the target city
+              return displayName.includes(cityLower) || 
+                     address.city?.toLowerCase().includes(cityLower) ||
+                     address.town?.toLowerCase().includes(cityLower) ||
+                     address.municipality?.toLowerCase().includes(cityLower);
+            });
+            
+            return filtered.map(place => {
+              const displayParts = place.display_name.split(',');
+              const name = displayParts[0].trim();
+              
+              // Skip if name is too generic
+              if (name.toLowerCase() === 'restaurant' || 
+                  name.toLowerCase() === 'fine dining' || 
+                  name.toLowerCase() === cat.type) {
+                return null;
+              }
+              
+              return {
+                name: name,
+                fullName: place.display_name,
+                type: cat.type,
+                address: place.address || {}
+              };
+            }).filter(r => r !== null);
+          }
+        }
+      } catch (e) {
+        console.log(`Failed to fetch ${cat.type} restaurants:`, e);
+      }
+      return [];
+    });
+
+    const results = await Promise.all(restaurantPromises);
+    results.forEach(restaurantList => {
+      restaurants.push(...restaurantList);
+    });
+
+    return restaurants.slice(0, 8); // Limit to 8 restaurants
+  } catch (error) {
+    console.log("❌ Error fetching romantic restaurants:", error);
+    return [];
+  }
+}
+
+// Get romantic venues and activities
+async function getRomanticVenues(city, country = "") {
+  try {
+    let useNearbySearch = false;
+    let lat = null;
+    let lon = null;
+    let actualCity = city;
+    
+    if (city.includes(',') && !isNaN(parseFloat(city.split(',')[0]))) {
+      const parts = city.split(',');
+      lat = parseFloat(parts[0].trim());
+      lon = parseFloat(parts[1].trim());
+      if (!isNaN(lat) && !isNaN(lon)) {
+        useNearbySearch = true;
+        // Try to get city name from coordinates
+        try {
+          const response = await apiQueue.enqueue(async () => {
+            return await fetchWithTimeout(
+              `https://nominatim.openstreetmap.org/reverse?format=json&lat=${lat}&lon=${lon}&addressdetails=1&zoom=10`,
+              {
+                headers: {
+                  'User-Agent': 'DailyPlannerApp/1.0',
+                  'Accept-Language': 'en'
+                }
+              },
+              15000
+            );
+          }, 'Reverse Geocoding (Valentine Venues)', false);
+          
+          if (response.ok) {
+            const data = await response.json();
+            const address = data.address || {};
+            actualCity = address.city || address.town || address.village || address.municipality || address.county || city;
+          }
+        } catch (e) {
+          console.log("Reverse geocoding failed, using coordinates");
+        }
+      }
+    }
+    
+    // Always include city name in query to filter results
+    const cityQuery = `${actualCity}${country ? `, ${country}` : ''}`;
+    const romanticCategories = [
+      { query: `park ${cityQuery}`, type: 'park' },
+      { query: `theater ${cityQuery}`, type: 'theater' },
+      { query: `art gallery ${cityQuery}`, type: 'gallery' },
+      { query: `cinema ${cityQuery}`, type: 'cinema' },
+      { query: `museum ${cityQuery}`, type: 'museum' }
+    ];
+
+    const venues = [];
+    
+    const venuePromises = romanticCategories.map(async (cat) => {
+      try {
+        let apiUrl;
+        if (useNearbySearch && lat && lon) {
+          apiUrl = `${PLACES_API_BASE}?q=${encodeURIComponent(cat.query)}&format=json&limit=2&addressdetails=1&lat=${lat}&lon=${lon}&radius=5000`;
+        } else {
+          apiUrl = `${PLACES_API_BASE}?q=${encodeURIComponent(cat.query)}&format=json&limit=2&addressdetails=1`;
+        }
+        
+        const response = await apiQueue.enqueue(async () => {
+          return await fetchWithTimeout(
+            apiUrl,
+            {
+              headers: {
+                'User-Agent': 'DailyPlannerApp/1.0'
+              }
+            },
+            8000
+          );
+        }, `Venue Search (${cat.type})`, false);
+        
+        if (response.ok) {
+          const data = await response.json();
+          if (data && data.length > 0) {
+            // Filter results to ensure they're in the target city
+            const filtered = data.filter(place => {
+              const displayName = place.display_name.toLowerCase();
+              const address = place.address || {};
+              const cityLower = actualCity.toLowerCase();
+              
+              // Check if the place is in the target city
+              return displayName.includes(cityLower) || 
+                     address.city?.toLowerCase().includes(cityLower) ||
+                     address.town?.toLowerCase().includes(cityLower) ||
+                     address.municipality?.toLowerCase().includes(cityLower);
+            });
+            
+            return filtered.map(place => {
+              const displayParts = place.display_name.split(',');
+              const name = displayParts[0].trim();
+              
+              // Skip if name is too generic
+              if (name.toLowerCase() === cat.type || 
+                  name.toLowerCase() === 'park' ||
+                  name.toLowerCase() === 'theater') {
+                return null;
+              }
+              
+              return {
+                name: name,
+                fullName: place.display_name,
+                type: cat.type,
+                address: place.address || {}
+              };
+            }).filter(v => v !== null);
+          }
+        }
+      } catch (e) {
+        console.log(`Failed to fetch ${cat.type} venues:`, e);
+      }
+      return [];
+    });
+
+    const results = await Promise.all(venuePromises);
+    results.forEach(venueList => {
+      venues.push(...venueList);
+    });
+
+    return venues.slice(0, 10);
+  } catch (error) {
+    console.log("❌ Error fetching romantic venues:", error);
+    return [];
+  }
+}
+
+// Generate romantic poems
+async function generateRomanticPoems() {
+  const prompt = `Generate 2-3 short, romantic poems suitable for Valentine's Day. Each poem should be:
+- 4-8 lines long
+- Romantic and heartfelt
+- Suitable for expressing love
+- Original and creative
+
+Format each poem clearly with line breaks. Separate poems with blank lines. Return only the poems, no additional text or markdown.`;
+
+  try {
+    const result = await callLLMText(prompt, 2);
+    if (result && result.trim()) {
+      return result.trim();
+    }
+    return null;
+  } catch (error) {
+    console.log("❌ Error generating poems:", error);
+    return null;
+  }
+}
+
+// Generate Valentine's Day plan with restaurants, activities, and booking tips
+async function generateValentinePlan(city, restaurants, venues, weather) {
+  const restaurantContext = restaurants.length > 0 
+    ? `\n\n=== ROMANTIC RESTAURANTS IN ${city.toUpperCase()} ===\n${restaurants.map((r, i) => `${i + 1}. ${r.name} - ${r.address?.road || r.address?.suburb || 'City center'}`).join('\n')}\n`
+    : '';
+
+  const venueContext = venues.length > 0
+    ? `\n\n=== ROMANTIC VENUES IN ${city.toUpperCase()} ===\n${venues.map((v, i) => `${i + 1}. ${v.name} (${v.type}) - ${v.address?.road || v.address?.suburb || 'City center'}`).join('\n')}\n`
+    : '';
+
+  const weatherContext = weather 
+    ? `\n\nWeather: Temperature ${weather.temperature}°C, ${weather.precipitation > 2 ? 'rain expected' : 'clear skies'}, Sunset at ${weather.sunset || 'evening'}\n`
+    : '';
+
+  const prompt = `Create a comprehensive Valentine's Day plan for ${city}.${weatherContext}${restaurantContext}${venueContext}
+
+Provide a detailed plan with:
+1. **Restaurant Recommendations**: Suggest 3-4 specific restaurants from the list above (or suggest alternatives if list is limited). For each restaurant, include:
+   - Why it's perfect for Valentine's Day
+   - Suggested dishes or cuisine type
+   - Ambiance description
+   - Price range estimate
+
+2. **Romantic Activities**: Suggest 4-5 activities using the venues above (or suggest alternatives). For each activity, include:
+   - Time of day (morning, afternoon, evening)
+   - Why it's romantic
+   - What to expect
+   - Duration estimate
+
+3. **Booking Tips**: Provide detailed, practical advice on:
+   - How to book restaurants (phone numbers, websites, booking platforms like OpenTable, Resy, etc.)
+   - When to book (how far in advance)
+   - What to mention when booking (special occasion, dietary requirements)
+   - Tips for getting reservations at popular places
+   - Alternative booking methods if direct booking fails
+
+Format the response clearly with sections and bullet points. Be specific and actionable.`;
+
+  try {
+    const result = await callLLMText(prompt, 2);
+    if (result && result.trim()) {
+      return result.trim();
+    }
+    return null;
+  } catch (error) {
+    console.log("❌ Error generating Valentine plan:", error);
+    return null;
+  }
+}
+
+// Store Valentine's Day locations data
+let valentineLocations = {
+  restaurants: [],
+  venues: []
+};
+
+// --- Locations Modal Functions ---
+function openLocationsModal(type) {
+  const modal = document.getElementById("locationsModal");
+  const title = document.getElementById("locationsModalTitle");
+  const list = document.getElementById("locationsList");
+  
+  if (!modal || !title || !list) return;
+  
+  const locations = type === 'restaurants' ? valentineLocations.restaurants : valentineLocations.venues;
+  const typeLabel = type === 'restaurants' ? 'Restaurants' : 'Activities';
+  
+  // Update title
+  title.textContent = `📍 ${typeLabel} Locations`;
+  
+  // Clear and populate list
+  list.innerHTML = '';
+  
+  if (locations.length === 0) {
+    list.innerHTML = '<p style="text-align: center; color: var(--text-secondary); padding: 40px;">No locations available.</p>';
+  } else {
+    locations.forEach((location, index) => {
+      const addressParts = [];
+      if (location.address?.road) addressParts.push(location.address.road);
+      if (location.address?.suburb) addressParts.push(location.address.suburb);
+      if (location.address?.city) addressParts.push(location.address.city);
+      if (location.address?.postcode) addressParts.push(location.address.postcode);
+      
+      const shortAddress = addressParts.length > 0 ? addressParts.join(', ') : location.fullName || 'Address not available';
+      const fullAddress = location.fullName || shortAddress;
+      
+      // Create Google Maps link
+      const mapsQuery = encodeURIComponent(location.fullName || `${location.name}, ${shortAddress}`);
+      const mapsUrl = `https://www.google.com/maps/search/?api=1&query=${mapsQuery}`;
+      
+      const locationItem = document.createElement('div');
+      locationItem.className = 'location-item';
+      locationItem.innerHTML = `
+        <div class="location-item-header">
+          <h4 class="location-item-name">${index + 1}. ${location.name}</h4>
+          <span class="location-item-type">${location.type || 'Location'}</span>
+        </div>
+        <div class="location-item-address">
+          <span class="icon">📍</span>
+          <span>${shortAddress}</span>
+        </div>
+        <div class="location-item-full-address">${fullAddress}</div>
+        <div class="location-item-actions">
+          <a href="${mapsUrl}" target="_blank" rel="noopener noreferrer" class="location-action-btn">
+            <span>🗺️</span>
+            <span>Open in Maps</span>
+          </a>
+          <button class="location-action-btn secondary copy-address-btn" data-address="${fullAddress.replace(/"/g, '&quot;')}">
+            <span>📋</span>
+            <span>Copy Address</span>
+          </button>
+        </div>
+      `;
+      
+      // Add event listener for copy button
+      const copyBtn = locationItem.querySelector('.copy-address-btn');
+      if (copyBtn) {
+        copyBtn.addEventListener('click', async () => {
+          const address = copyBtn.getAttribute('data-address');
+          try {
+            await navigator.clipboard.writeText(address);
+            // Show temporary success message
+            const originalText = copyBtn.querySelector('span:last-child').textContent;
+            copyBtn.querySelector('span:last-child').textContent = 'Copied!';
+            copyBtn.style.background = 'rgba(76, 175, 80, 0.2)';
+            copyBtn.style.borderColor = 'rgba(76, 175, 80, 0.5)';
+            setTimeout(() => {
+              copyBtn.querySelector('span:last-child').textContent = originalText;
+              copyBtn.style.background = '';
+              copyBtn.style.borderColor = '';
+            }, 2000);
+          } catch (err) {
+            alert('Failed to copy address. Please copy manually: ' + address);
+          }
+        });
+      }
+      
+      list.appendChild(locationItem);
+    });
+  }
+  
+  modal.style.display = "flex";
+  document.body.style.overflow = "hidden";
+}
+
+function closeLocationsModal() {
+  const modal = document.getElementById("locationsModal");
+  if (modal) {
+    modal.style.display = "none";
+    document.body.style.overflow = "";
+  }
+}
+
+// Main Valentine's Day planning function
+async function runValentine() {
+  const valentineButton = document.getElementById("runValentine");
+  
+  if (!valentineButton) {
+    console.error("Valentine button not found");
+    return;
+  }
+
+  valentineButton.disabled = true;
+  
+  // Reset locations data
+  valentineLocations = {
+    restaurants: [],
+    venues: []
+  };
+  
+  // Hide regular plan grid, show Valentine container
+  const planGrid = document.getElementById("planGrid");
+  const valentinePlan = document.getElementById("valentinePlan");
+  const infoCards = document.getElementById("infoCards");
+  
+  if (planGrid) planGrid.style.display = "none";
+  if (infoCards) infoCards.style.display = "none";
+  if (valentinePlan) {
+    valentinePlan.style.display = "block";
+  }
+
+  try {
+    // Get user location
+    const locationData = await getUserLocation();
+    userLocation = {
+      city: locationData.city,
+      latitude: locationData.latitude,
+      longitude: locationData.longitude,
+      country: locationData.country || ""
+    };
+
+    // Update location display
+    const locationText = document.getElementById("valentineLocation");
+    if (locationText) {
+      locationText.textContent = `${userLocation.city}${userLocation.country ? `, ${userLocation.country}` : ''}`;
+    }
+
+    // Fetch weather
+    const weather = await fetchWeather(userLocation.latitude, userLocation.longitude);
+
+    // Fetch restaurants and venues in parallel
+    const searchQuery = userLocation.latitude && userLocation.longitude 
+      ? `${userLocation.latitude},${userLocation.longitude}`
+      : userLocation.city;
+
+    console.log("💕 Fetching romantic restaurants and venues...");
+    const [restaurants, venues] = await Promise.all([
+      getRomanticRestaurants(searchQuery, userLocation.country),
+      getRomanticVenues(searchQuery, userLocation.country)
+    ]);
+
+    // Store locations for modal
+    valentineLocations.restaurants = restaurants;
+    valentineLocations.venues = venues;
+
+    console.log(`✅ Found ${restaurants.length} restaurants and ${venues.length} venues`);
+    
+    // Show view locations buttons if we have data
+    const viewRestaurantBtn = document.getElementById("viewRestaurantLocations");
+    const viewActivityBtn = document.getElementById("viewActivityLocations");
+    if (viewRestaurantBtn) {
+      viewRestaurantBtn.style.display = restaurants.length > 0 ? "inline-flex" : "none";
+    }
+    if (viewActivityBtn) {
+      viewActivityBtn.style.display = venues.length > 0 ? "inline-flex" : "none";
+    }
+
+    // Generate poems
+    console.log("💌 Generating romantic poems...");
+    const poemsContent = document.getElementById("poemsContent");
+    if (poemsContent) {
+      poemsContent.innerHTML = '<p class="loading-text">Generating romantic poems...</p>';
+    }
+    
+    const poems = await generateRomanticPoems();
+    if (poemsContent) {
+      if (poems) {
+        const poemBlocks = poems.split(/\n\n+/).filter(p => p.trim());
+        if (poemBlocks.length > 0) {
+          poemsContent.innerHTML = poemBlocks.map(poem => 
+            `<div class="poem-block">${poem.split('\n').map(line => line.trim() ? `<p>${line}</p>` : '').join('')}</div>`
+          ).join('');
+        } else {
+          // Fallback poems
+          poemsContent.innerHTML = `
+            <div class="poem-block">
+              <p>In your eyes, I see my world,</p>
+              <p>In your smile, my heart unfurled.</p>
+              <p>On this day of love so true,</p>
+              <p>I give my heart, dear, to you.</p>
+            </div>
+            <div class="poem-block">
+              <p>Like stars that light the darkest night,</p>
+              <p>Your love makes everything feel right.</p>
+              <p>Together we'll create memories new,</p>
+              <p>Forever grateful, I am for you.</p>
+            </div>
+          `;
+        }
+      } else {
+        // Fallback poems
+        poemsContent.innerHTML = `
+          <div class="poem-block">
+            <p>In your eyes, I see my world,</p>
+            <p>In your smile, my heart unfurled.</p>
+            <p>On this day of love so true,</p>
+            <p>I give my heart, dear, to you.</p>
+          </div>
+          <div class="poem-block">
+            <p>Like stars that light the darkest night,</p>
+            <p>Your love makes everything feel right.</p>
+            <p>Together we'll create memories new,</p>
+            <p>Forever grateful, I am for you.</p>
+          </div>
+        `;
+      }
+    }
+
+    // Generate and display restaurants
+    console.log("🍽️ Generating restaurant recommendations...");
+    const restaurantsContent = document.getElementById("restaurantsContent");
+    if (restaurantsContent) {
+      restaurantsContent.innerHTML = '<p class="loading-text">Finding perfect dining spots...</p>';
+    }
+
+    // Generate and display activities
+    console.log("🎭 Generating romantic activities...");
+    const activitiesContent = document.getElementById("activitiesContent");
+    if (activitiesContent) {
+      activitiesContent.innerHTML = '<p class="loading-text">Planning special activities...</p>';
+    }
+
+    // Generate full plan
+    const fullPlan = await generateValentinePlan(userLocation.city, restaurants, venues, weather);
+    
+    if (fullPlan) {
+      // Parse and display restaurants
+      const restaurantMatch = fullPlan.match(/(?:##?\s*)?(?:Restaurant Recommendations?|Restaurants?)[:\.]?\s*([\s\S]*?)(?=(?:##?\s*)?(?:Romantic Activities?|Activities?|Booking Tips?)|$)/i);
+      if (restaurantMatch && restaurantsContent) {
+        const restaurantText = restaurantMatch[1].trim();
+        restaurantsContent.innerHTML = `<div>${restaurantText.split('\n').map(line => {
+          const trimmed = line.trim();
+          if (trimmed.match(/^\d+\./)) {
+            return `<div class="restaurant-item"><h5>${trimmed}</h5></div>`;
+          } else if (trimmed && !trimmed.match(/^[-*•]/)) {
+            return `<p>${trimmed}</p>`;
+          } else if (trimmed) {
+            return `<p>${trimmed.replace(/^[-*•]\s*/, '')}</p>`;
+          }
+          return '';
+        }).filter(html => html.trim()).join('')}</div>`;
+      } else if (restaurantsContent) {
+        // Fallback: use actual restaurant data
+        if (restaurants.length > 0) {
+          restaurantsContent.innerHTML = `<div>${restaurants.slice(0, 4).map((r, i) => 
+            `<div class="restaurant-item">
+              <h5>${i + 1}. ${r.name}</h5>
+              <p>📍 ${r.address?.road || r.address?.suburb || r.address?.city || 'City center'}</p>
+              <p>Perfect for a romantic Valentine's Day dinner. Consider making a reservation in advance.</p>
+            </div>`
+          ).join('')}</div>`;
+        } else {
+          restaurantsContent.innerHTML = '<p>Searching for romantic restaurants in your area. Please check back shortly or try searching online for "romantic restaurants" in your city.</p>';
+        }
+      }
+
+      // Parse and display activities
+      const activityMatch = fullPlan.match(/(?:##?\s*)?(?:Romantic Activities?|Activities?)[:\.]?\s*([\s\S]*?)(?=(?:##?\s*)?(?:Booking Tips?|$))/i);
+      if (activityMatch && activitiesContent) {
+        const activityText = activityMatch[1].trim();
+        activitiesContent.innerHTML = `<div>${activityText.split('\n').map(line => {
+          const trimmed = line.trim();
+          if (trimmed.match(/^\d+\./)) {
+            return `<div class="activity-item"><h5>${trimmed}</h5></div>`;
+          } else if (trimmed && !trimmed.match(/^[-*•]/)) {
+            return `<p>${trimmed}</p>`;
+          } else if (trimmed) {
+            return `<p>${trimmed.replace(/^[-*•]\s*/, '')}</p>`;
+          }
+          return '';
+        }).filter(html => html.trim()).join('')}</div>`;
+      } else if (activitiesContent) {
+        // Fallback: use actual venue data
+        if (venues.length > 0) {
+          activitiesContent.innerHTML = `<div>${venues.slice(0, 5).map((v, i) => 
+            `<div class="activity-item">
+              <h5>${i + 1}. Visit ${v.name}</h5>
+              <p>📍 ${v.address?.road || v.address?.suburb || v.address?.city || 'City center'}</p>
+              <p>Type: ${v.type.charAt(0).toUpperCase() + v.type.slice(1)}</p>
+              <p>A perfect romantic activity for Valentine's Day.</p>
+            </div>`
+          ).join('')}</div>`;
+        } else {
+          activitiesContent.innerHTML = '<p>Consider visiting a local park, art gallery, or theater for a romantic Valentine\'s Day activity. Check local listings for special events.</p>';
+        }
+      }
+
+      // Parse and display booking tips
+      const bookingMatch = fullPlan.match(/\*\*Booking Tips?\*\*:?([\s\S]*?)(?=\*\*|$)/i);
+      const bookingContent = document.getElementById("bookingContent");
+      if (bookingMatch && bookingContent) {
+        const bookingText = bookingMatch[1].trim();
+        bookingContent.innerHTML = `<div>${bookingText.split('\n').map(line => {
+          if (line.trim().match(/^[-•]/)) {
+            return `<div class="booking-tip"><p>${line.trim().replace(/^[-•]\s*/, '')}</p></div>`;
+          } else if (line.trim()) {
+            return `<p>${line.trim()}</p>`;
+          }
+          return '';
+        }).join('')}</div>`;
+      } else if (bookingContent) {
+        bookingContent.innerHTML = '<p>Booking tips will be available shortly.</p>';
+      }
+    } else {
+      // Fallback display - use actual data
+      if (restaurantsContent) {
+        if (restaurants.length > 0) {
+          restaurantsContent.innerHTML = `<div>${restaurants.slice(0, 4).map((r, i) => 
+            `<div class="restaurant-item">
+              <h5>${i + 1}. ${r.name}</h5>
+              <p>📍 ${r.address?.road || r.address?.suburb || r.address?.city || 'City center'}</p>
+              <p>Perfect for a romantic Valentine's Day dinner. Consider making a reservation in advance.</p>
+            </div>`
+          ).join('')}</div>`;
+        } else {
+          restaurantsContent.innerHTML = '<p>Searching for romantic restaurants in your area. Please check back shortly or try searching online for "romantic restaurants" in your city.</p>';
+        }
+      }
+      
+      if (activitiesContent) {
+        if (venues.length > 0) {
+          activitiesContent.innerHTML = `<div>${venues.slice(0, 5).map((v, i) => 
+            `<div class="activity-item">
+              <h5>${i + 1}. Visit ${v.name}</h5>
+              <p>📍 ${v.address?.road || v.address?.suburb || v.address?.city || 'City center'}</p>
+              <p>Type: ${v.type.charAt(0).toUpperCase() + v.type.slice(1)}</p>
+              <p>A perfect romantic activity for Valentine's Day.</p>
+            </div>`
+          ).join('')}</div>`;
+        } else {
+          activitiesContent.innerHTML = '<p>Consider visiting a local park, art gallery, or theater for a romantic Valentine\'s Day activity. Check local listings for special events.</p>';
+        }
+      }
+
+      if (bookingContent) {
+        bookingContent.innerHTML = `
+          <div class="booking-tip">
+            <strong>📞 Book Early</strong>
+            <p>Valentine's Day is one of the busiest days for restaurants. Book at least 1-2 weeks in advance.</p>
+          </div>
+          <div class="booking-tip">
+            <strong>🌐 Use Online Platforms</strong>
+            <p>Check OpenTable, Resy, Bookatable, or the restaurant's website for online reservations. Many restaurants also use their own booking systems.</p>
+          </div>
+          <div class="booking-tip">
+            <strong>📱 Call Directly</strong>
+            <p>If online booking is full, call the restaurant directly during business hours. Sometimes they hold tables for phone reservations or have cancellations.</p>
+          </div>
+          <div class="booking-tip">
+            <strong>💬 Mention the Occasion</strong>
+            <p>When booking, mention it's for Valentine's Day. Restaurants often have special menus, romantic seating arrangements, or can accommodate special requests.</p>
+          </div>
+          <div class="booking-tip">
+            <strong>🕐 Be Flexible</strong>
+            <p>Consider booking slightly earlier or later than peak times (6-8 PM). You may have better availability and a more intimate experience.</p>
+          </div>
+        `;
+      }
+    }
+
+  } catch (error) {
+    console.error("❌ Error in Valentine's Day planning:", error);
+    alert("An error occurred while planning your Valentine's Day. Please try again.");
+  } finally {
+    if (valentineButton) valentineButton.disabled = false;
+  }
+}
+
 // --- Bind UI ---
 document.addEventListener('DOMContentLoaded', () => {
   // Plan My Day button
@@ -2366,6 +3128,14 @@ document.addEventListener('DOMContentLoaded', () => {
     runButton.addEventListener("click", runAgent);
   } else {
     console.error("Run button not found");
+  }
+
+  // Plan my Valentine day button
+  const valentineButton = document.getElementById("runValentine");
+  if (valentineButton) {
+    valentineButton.addEventListener("click", runValentine);
+  } else {
+    console.error("Valentine button not found");
   }
 
   // Modify Plan button (floating)
@@ -2394,10 +3164,40 @@ document.addEventListener('DOMContentLoaded', () => {
 
   // ESC key to close modal
   document.addEventListener("keydown", (e) => {
-    if (e.key === "Escape" && modal && modal.style.display !== "none") {
-      closeModifyModal();
+    if (e.key === "Escape") {
+      const modifyModal = document.getElementById("modifyModal");
+      const locationsModal = document.getElementById("locationsModal");
+      if (modifyModal && modifyModal.style.display !== "none") {
+        closeModifyModal();
+      }
+      if (locationsModal && locationsModal.style.display !== "none") {
+        closeLocationsModal();
+      }
     }
   });
+
+  // Locations Modal handlers
+  const locationsModal = document.getElementById("locationsModal");
+  const locationsModalBackdrop = document.getElementById("locationsModalBackdrop");
+  const locationsModalClose = document.getElementById("locationsModalClose");
+  const viewRestaurantLocations = document.getElementById("viewRestaurantLocations");
+  const viewActivityLocations = document.getElementById("viewActivityLocations");
+
+  if (locationsModalClose) {
+    locationsModalClose.addEventListener("click", closeLocationsModal);
+  }
+
+  if (locationsModalBackdrop) {
+    locationsModalBackdrop.addEventListener("click", closeLocationsModal);
+  }
+
+  if (viewRestaurantLocations) {
+    viewRestaurantLocations.addEventListener("click", () => openLocationsModal('restaurants'));
+  }
+
+  if (viewActivityLocations) {
+    viewActivityLocations.addEventListener("click", () => openLocationsModal('venues'));
+  }
 
   // Handle modal option changes
   const modifyTypeRadios = document.querySelectorAll('input[name="modifyType"]');

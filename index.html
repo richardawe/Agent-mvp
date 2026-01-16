@@ -25,7 +25,7 @@
             </linearGradient>
           </defs>
         </svg>
-        <h1>AI Daily Planner</h1>
+        <h1>AI Planner</h1>
       </div>
       <p class="tagline">Your intelligent assistant for a perfectly planned day</p>
       <div id="locationDisplay" class="location-display" style="display: none;">
@@ -35,11 +35,18 @@
     </header>
 
     <div class="action-section">
-      <button id="runAgent" class="cta-button">
-        <span class="button-icon">✨</span>
-        <span class="button-text">Plan My Day</span>
-        <span class="button-shine"></span>
-      </button>
+      <div class="hub-buttons">
+        <button id="runAgent" class="cta-button">
+          <span class="button-icon">✨</span>
+          <span class="button-text">Plan My Day</span>
+          <span class="button-shine"></span>
+        </button>
+        <button id="runValentine" class="cta-button valentine-button">
+          <span class="button-icon">💕</span>
+          <span class="button-text">Plan my Valentine Day</span>
+          <span class="button-shine"></span>
+        </button>
+      </div>
       <p class="hint">Powered by AI • Weather-aware • Location-based</p>
     </div>
 
@@ -71,6 +78,64 @@
     <!-- Plan Grid Container -->
     <div id="planGrid" class="plan-grid" style="display: none;">
       <!-- Cards will be generated dynamically -->
+    </div>
+
+    <!-- Valentine's Day Plan Container -->
+    <div id="valentinePlan" class="valentine-container" style="display: none;">
+      <div class="valentine-header">
+        <h2>💕 Your Perfect Valentine's Day Plan</h2>
+        <p id="valentineLocation" class="valentine-location">Loading location...</p>
+      </div>
+      
+      <div class="valentine-sections">
+        <!-- Romantic Poems Section -->
+        <div id="valentinePoems" class="valentine-section">
+          <div class="valentine-section-header">
+            <h3>💌 Romantic Poems</h3>
+          </div>
+          <div class="valentine-section-content" id="poemsContent">
+            <p class="loading-text">Generating romantic poems...</p>
+          </div>
+        </div>
+
+        <!-- Restaurants Section -->
+        <div id="valentineRestaurants" class="valentine-section">
+          <div class="valentine-section-header">
+            <h3>🍽️ Romantic Restaurants</h3>
+            <button id="viewRestaurantLocations" class="view-locations-btn" style="display: none;" title="View all restaurant locations">
+              <span class="button-icon">📍</span>
+              <span class="button-text">View Locations</span>
+            </button>
+          </div>
+          <div class="valentine-section-content" id="restaurantsContent">
+            <p class="loading-text">Finding perfect dining spots...</p>
+          </div>
+        </div>
+
+        <!-- Activities Section -->
+        <div id="valentineActivities" class="valentine-section">
+          <div class="valentine-section-header">
+            <h3>🎭 Romantic Activities</h3>
+            <button id="viewActivityLocations" class="view-locations-btn" style="display: none;" title="View all activity locations">
+              <span class="button-icon">📍</span>
+              <span class="button-text">View Locations</span>
+            </button>
+          </div>
+          <div class="valentine-section-content" id="activitiesContent">
+            <p class="loading-text">Planning special activities...</p>
+          </div>
+        </div>
+
+        <!-- Booking Tips Section -->
+        <div id="valentineBooking" class="valentine-section">
+          <div class="valentine-section-header">
+            <h3>📋 Booking Guide & Tips</h3>
+          </div>
+          <div class="valentine-section-content" id="bookingContent">
+            <p class="loading-text">Preparing booking instructions...</p>
+          </div>
+        </div>
+      </div>
     </div>
 
     <!-- Info Cards (Clothing, Social Activities & Events) -->
@@ -106,6 +171,22 @@
       <span class="button-icon">🎯</span>
       <span class="button-text">Modify Plan</span>
     </button>
+
+    <!-- Locations Modal -->
+    <div id="locationsModal" class="modal" style="display: none;">
+      <div class="modal-backdrop" id="locationsModalBackdrop"></div>
+      <div class="modal-content locations-modal-content">
+        <div class="modal-header">
+          <h2 id="locationsModalTitle">📍 Locations</h2>
+          <button class="modal-close" id="locationsModalClose" aria-label="Close Modal">×</button>
+        </div>
+        <div class="modal-body">
+          <div id="locationsList" class="locations-list">
+            <!-- Locations will be populated here -->
+          </div>
+        </div>
+      </div>
+    </div>
 
     <!-- Modify Plan Modal -->
     <div id="modifyModal" class="modal" style="display: none;">
